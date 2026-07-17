@@ -1,0 +1,62 @@
+package main
+
+// go++ v0.1 demo: enums, match (statement + expression), Result, channels.
+// Expected output (println goes to stderr):
+//   live
+//   live
+//   recv fired
+//   5
+//   err: division by zero
+
+enum Status {
+    Pending
+    Active
+    Failed(reason string)
+}
+
+func divide(a int, b int) Result[int, string] {
+    if b == 0 {
+        return Err[int, string]("division by zero")
+    }
+    return Ok[int, string](a / b)
+}
+
+func main() {
+    s := Active
+
+    // statement match on an enum
+    match s {
+    Pending -> println("waiting...")
+    Active -> println("live")
+    Failed(reason) -> println("dead: " + reason)
+    }
+
+    // value-producing match
+    msg := match s {
+    Pending -> "waiting..."
+    Active -> "live"
+    Failed(reason) -> "dead: " + reason
+    }
+    println(msg)
+
+    // channels without arrows + match as select
+    ch := chan[Status](1)
+    ch.send(s)
+    match {
+    _ := ch.recv() -> println("recv fired")
+    after(1 * second) -> println("timeout")
+    }
+
+    // Result + match
+    r := divide(10, 2)
+    match r {
+    Ok(v) -> println(v)
+    Err(e) -> println("err: " + e)
+    }
+
+    r2 := divide(1, 0)
+    match r2 {
+    Ok(v) -> println(v)
+    Err(e) -> println("err: " + e)
+    }
+}
