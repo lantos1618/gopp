@@ -6,27 +6,27 @@ import (
 	"path/filepath"
 )
 
-// gopp is the go++ v0.1 transpiler: it converts a single .gopp source file
-// into a runnable Go package (go++ -> Go -> binary via the Go toolchain or
-// a TinyGo fork).
+// gopp is the go++ compiler: it compiles a single .gopp source file into a
+// runnable Go package (go++ -> Go -> binary via the Go toolchain or a
+// TinyGo fork).
 //
-// Supported v0.1 subset:
-//   - enum declarations (unit + payload variants, non-generic)
-//   - match on a subject (enum variants with destructuring, literals, _,
-//     guards via `if`), as a statement or as a value-producing expression
-//   - match without a subject over channel arms (recv/send/after/_), i.e.
-//     the select replacement
+// Pipeline: lex (lex.go) -> parse (parse.go) -> check (sema.go) -> emit
+// (emit.go). This is a real frontend: name resolution, type checking with
+// generic enum instantiation, and compile-time exhaustiveness checking.
+//
+// Language subset (v2):
+//   - enum declarations, incl. generics: enum Result[T, E] { Ok(T) Err(E) }
+//   - match on a subject (variants, literals, bindings, guards) with
+//     compile-time exhaustiveness checking; match without a subject over
+//     channel arms (recv/send/after/_) or boolean arms
 //   - chan[T](cap) construction and .send/.recv/.close methods
 //   - loop { } with break loop
-//   - maps that are instantiated on declaration: var m map[K]V
-//     lowers to var m map[K]V = make(map[K]V), no nil-map panics
+//   - maps instantiated on declaration: var m map[K]V lowers to make(...)
 //   - Result[T,E] / Option[T] from the emitted prelude
 //
-// Known v0.1 limitations (rejected with clear errors):
-//   - guards on channel arms (needs peek semantics Go channels lack)
-//   - .closed() match arms
-//   - generic user enums, comptime, @derive, the ? try operator
-//   - bare Ok(...)/Err(...) calls need explicit type args: Ok[int, string](v)
+// Rejected with clear errors (not yet supported):
+//   - guards on channel arms and .closed() arms (Go channels cannot peek)
+//   - comptime, @derive, the ? try operator, imports, struct types
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir]")
@@ -45,10 +45,15 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	goSrc, err := newTr().xform(toks)
+	file, err := parse(toks)
 	if err != nil {
 		fatal(err)
 	}
+	chk, err := check(file)
+	if err != nil {
+		fatal(err)
+	}
+	goSrc := emit(file, chk)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fatal(err)
 	}
@@ -60,7 +65,7 @@ func main() {
 	w("main.go", goSrc)
 	w("gopp_prelude.go", prelude)
 	w("go.mod", "module goppout\n\ngo 1.23\n")
-	fmt.Printf("transpiled %s -> %s (cd %s && go run .)\n", in, outDir, outDir)
+	fmt.Printf("compiled %s -> %s (cd %s && go run .)\n", in, outDir, outDir)
 }
 
 func fatal(err error) {

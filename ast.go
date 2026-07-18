@@ -1,0 +1,316 @@
+package main
+
+// ast.go — go++ v2 compiler: abstract syntax tree.
+// The v2 pipeline is: lex -> parse (this AST) -> sema -> emit Go.
+// v0.1 was a token-rewriting transpiler (transpile.go); v2 is a real
+// frontend with a typed AST, so sema can do name resolution, type
+// checking, generic enum instantiation, and exhaustiveness checking.
+
+// ---------- nodes ----------
+
+type File struct {
+	PkgName string
+	Decls   []Decl
+}
+
+type Decl interface{ declNode() }
+
+type Field struct {
+	Name string // may be "" for unnamed
+	Type TypeExpr
+	Line int
+}
+
+type FuncDecl struct {
+	Name    string
+	Params  []Field
+	Results []Field // 0 or 1 used in practice
+	Body    *Block
+	Line    int
+}
+
+type EnumDecl struct {
+	Name       string
+	TypeParams []string // e.g. ["T", "E"]; empty = non-generic
+	Variants   []Variant
+	Line       int
+}
+
+type Variant struct {
+	Name   string
+	Fields []Field
+	Line   int
+}
+
+func (*FuncDecl) declNode() {}
+func (*EnumDecl) declNode() {}
+
+// ---------- types ----------
+
+type TypeExpr interface{ typeNode() }
+
+type IdentType struct {
+	Name string // int, string, Status, T ...
+	Line int
+}
+
+type IndexType struct { // Result[int, string]
+	X    TypeExpr
+	Args []TypeExpr
+	Line int
+}
+
+type MapType struct {
+	K, V TypeExpr
+	Line int
+}
+
+type ChanType struct {
+	Elem TypeExpr
+	Line int
+}
+
+type SliceType struct {
+	Elem TypeExpr
+	Line int
+}
+
+type StarType struct {
+	X    TypeExpr
+	Line int
+}
+
+func (*IdentType) typeNode() {}
+func (*IndexType) typeNode() {}
+func (*MapType) typeNode()   {}
+func (*ChanType) typeNode()  {}
+func (*SliceType) typeNode() {}
+func (*StarType) typeNode()  {}
+
+// ---------- statements ----------
+
+type Stmt interface{ stmtNode() }
+
+type Block struct {
+	List []Stmt
+	Line int
+}
+
+// VarStmt is `var name Type [= init]`. Map types without init are
+// auto-instantiated by the emitter (no nil maps in go++).
+type VarStmt struct {
+	Name string
+	Type TypeExpr
+	Init Expr // nil = no initializer
+	Line int
+}
+
+type ExprStmt struct {
+	X    Expr
+	Line int
+}
+
+type AssignStmt struct {
+	Lhs  []Expr
+	Op   string // ":=", "=", "+=", ...
+	Rhs  []Expr
+	Line int
+}
+
+type IfStmt struct {
+	Init Stmt // optional simple statement before ;
+	Cond Expr
+	Then *Block
+	Else Stmt // *Block or *IfStmt or nil
+	Line int
+}
+
+// ForStmt covers Go's for: for [init]; [cond]; [post] { } and for-range
+// is out of v2 scope.
+type ForStmt struct {
+	Init Stmt
+	Cond Expr
+	Post Stmt
+	Body *Block
+	Line int
+}
+
+type LoopStmt struct {
+	Body *Block
+	Line int
+}
+
+type BreakStmt struct {
+	Label string // "" = plain break, "loop" = innermost go++ loop
+	Line  int
+}
+
+type ReturnStmt struct {
+	Results []Expr
+	Line    int
+}
+
+type IncDecStmt struct {
+	X    Expr
+	Op   string // "++" or "--"
+	Line int
+}
+
+func (*Block) stmtNode()      {}
+func (*VarStmt) stmtNode()    {}
+func (*ExprStmt) stmtNode()   {}
+func (*AssignStmt) stmtNode() {}
+func (*IfStmt) stmtNode()     {}
+func (*ForStmt) stmtNode()    {}
+func (*LoopStmt) stmtNode()   {}
+func (*BreakStmt) stmtNode()  {}
+func (*ReturnStmt) stmtNode() {}
+func (*IncDecStmt) stmtNode() {}
+
+// ---------- expressions ----------
+
+type Expr interface{ exprNode() }
+
+type Ident struct {
+	Name string
+	Line int
+}
+
+type BasicLit struct {
+	Kind  tokKind // kInt, kFloat, kString, kRune
+	Value string
+	Line  int
+}
+
+type BinaryExpr struct {
+	Op   string
+	X, Y Expr
+	Line int
+}
+
+type UnaryExpr struct {
+	Op   string // -, !, <-
+	X    Expr
+	Line int
+}
+
+type CallExpr struct {
+	Fun  Expr
+	Args []Expr
+	Line int
+}
+
+type SelectorExpr struct {
+	X    Expr
+	Sel  string
+	Line int
+}
+
+// IndexExpr covers a[i] and generic instantiation Result[int, string];
+// sema disambiguates by the type of X.
+type IndexExpr struct {
+	X     Expr
+	Index []Expr
+	Line  int
+}
+
+// MakeChanExpr is `chan[T](cap)` / `chan[T]()` in expression position.
+type MakeChanExpr struct {
+	Elem TypeExpr
+	Cap  Expr // nil = unbuffered
+	Line int
+}
+
+// MatchExpr is both a statement (wrapped in ExprStmt) and an expression.
+// Subject == nil means the subject-less form (channel/boolean arms).
+type MatchExpr struct {
+	Subject Expr
+	Arms    []MatchArm
+	Fair    bool
+	Line    int
+}
+
+func (*Ident) exprNode()        {}
+func (*BasicLit) exprNode()     {}
+func (*BinaryExpr) exprNode()   {}
+func (*UnaryExpr) exprNode()    {}
+func (*CallExpr) exprNode()     {}
+func (*SelectorExpr) exprNode() {}
+func (*IndexExpr) exprNode()    {}
+func (*MakeChanExpr) exprNode() {}
+func (*MatchExpr) exprNode()    {}
+
+// ---------- match patterns ----------
+
+type Pattern interface{ patNode() }
+
+type WildcardPat struct{ Line int }
+
+// IdentPat binds the subject value to Name.
+type IdentPat struct {
+	Name string
+	Line int
+}
+
+// LiteralPat matches by equality (0, "x", someExpr).
+type LiteralPat struct {
+	X    Expr
+	Line int
+}
+
+// VariantPat destructures an enum variant: Failed(reason), Ok(v).
+type VariantPat struct {
+	Name     string
+	Bindings []string
+	Line     int
+}
+
+// RecvPat: x := ch.recv()
+type RecvPat struct {
+	Bind string // "" or "_" = discard
+	Chan Expr
+	Line int
+}
+
+// SendPat: ch.send(v)
+type SendPat struct {
+	Chan  Expr
+	Value Expr
+	Line  int
+}
+
+// AfterPat: after(d)
+type AfterPat struct {
+	D    Expr
+	Line int
+}
+
+// ClosedPat: ch.closed()
+type ClosedPat struct {
+	Chan Expr
+	Line int
+}
+
+// BoolPat: if cond (subject-less boolean arm)
+type BoolPat struct {
+	X    Expr
+	Line int
+}
+
+type MatchArm struct {
+	Pat      Pattern
+	Guard    Expr // nil = no guard
+	Body     []Stmt
+	BodyExpr Expr // non-nil = single-expression arm
+	Line     int
+}
+
+func (*WildcardPat) patNode() {}
+func (*IdentPat) patNode()    {}
+func (*LiteralPat) patNode()  {}
+func (*VariantPat) patNode()  {}
+func (*RecvPat) patNode()     {}
+func (*SendPat) patNode()     {}
+func (*AfterPat) patNode()    {}
+func (*ClosedPat) patNode()   {}
+func (*BoolPat) patNode()     {}
