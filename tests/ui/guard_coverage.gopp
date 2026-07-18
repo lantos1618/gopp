@@ -1,0 +1,10 @@
+package main
+enum Status { Pending Active }
+func main() {
+    s := Pending
+    m := match s { //~ ERROR non-exhaustive match on Status: missing Active
+    Pending -> 1
+    Active if 1 > 0 -> 2
+    }
+    println(m)
+}

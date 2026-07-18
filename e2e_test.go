@@ -23,9 +23,9 @@ func compileAndRun(t *testing.T, srcPath string) string {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	chk, err := check(file)
-	if err != nil {
-		t.Fatalf("check: %v", err)
+	chk, diags := check(file)
+	if diags.HasErrors() {
+		t.Fatalf("check:\n%s", diags)
 	}
 	dir := t.TempDir()
 	write := func(name, data string) {

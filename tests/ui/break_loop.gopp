@@ -1,0 +1,4 @@
+package main
+func main() {
+    break loop //~ ERROR break loop outside of a loop block
+}

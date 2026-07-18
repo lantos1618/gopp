@@ -1,0 +1,8 @@
+// positive: an unguarded binding matches everything, like _ (§9)
+package main
+func f(n int) int {
+    return match n {
+    x -> x + 1
+    }
+}
+func main() { println(f(41)) }

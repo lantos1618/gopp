@@ -1,0 +1,14 @@
+package main
+enum Status { Pending Active }
+func main() {
+    s := Pending
+    match s {
+    _ -> println("any")
+    Pending -> println("pending") //~ WARN unreachable pattern
+    }
+    match s {
+    Pending -> println("p")
+    Pending -> println("p2") //~ WARN unreachable pattern
+    Active -> println("a")
+    }
+}

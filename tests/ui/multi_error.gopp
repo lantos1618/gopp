@@ -1,0 +1,6 @@
+package main
+func main() {
+    x := nope1 //~ ERROR undefined: nope1
+    y := nope2 //~ ERROR undefined: nope2
+    println(x, y)
+}

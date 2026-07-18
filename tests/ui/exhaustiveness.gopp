@@ -1,0 +1,13 @@
+package main
+enum Status {
+    Pending
+    Active
+    Failed(reason string)
+}
+func main() {
+    s := Active
+    match s { //~ ERROR non-exhaustive match on Status: missing Failed
+    Pending -> println("waiting")
+    Active -> println("live")
+    }
+}

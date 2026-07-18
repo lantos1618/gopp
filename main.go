@@ -41,18 +41,22 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	// All diagnostics from all passes are collected and printed together;
+	// codegen only runs on a clean bill (skeleton §0/§11).
+	diags := &Diagnostics{}
 	toks, err := lex(string(src))
 	if err != nil {
-		fatal(err)
+		diagFromError(diags, err)
+		printDiags(diags)
 	}
 	file, err := parse(toks)
 	if err != nil {
-		fatal(err)
+		diagFromError(diags, err)
+		printDiags(diags)
 	}
-	chk, err := check(file)
-	if err != nil {
-		fatal(err)
-	}
+	chk, semDiags := check(file)
+	diags.items = append(diags.items, semDiags.items...)
+	printDiags(diags)
 	goSrc := emit(file, chk)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fatal(err)
@@ -66,6 +70,18 @@ func main() {
 	w("gopp_prelude.go", prelude)
 	w("go.mod", "module goppout\n\ngo 1.23\n")
 	fmt.Printf("compiled %s -> %s (cd %s && go run .)\n", in, outDir, outDir)
+}
+
+// printDiags prints all collected diagnostics and exits non-zero if any
+// errors were recorded.
+func printDiags(diags *Diagnostics) {
+	if len(diags.items) == 0 {
+		return
+	}
+	fmt.Fprint(os.Stderr, diags.String())
+	if diags.HasErrors() {
+		os.Exit(1)
+	}
 }
 
 func fatal(err error) {

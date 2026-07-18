@@ -1,0 +1,5 @@
+package main
+func f(x int) int { //~ ERROR function f: missing return
+    if x > 0 { return 1 }
+}
+func main() {}

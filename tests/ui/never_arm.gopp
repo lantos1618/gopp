@@ -1,0 +1,10 @@
+// positive: a diverging arm (panic) satisfies a value-producing match (§4 tNever)
+package main
+func f() string {
+    r := Err[int, string]("boom")
+    return match r {
+    Ok(v) -> "ok"
+    Err(e) -> panic(e)
+    }
+}
+func main() { println(f()) }

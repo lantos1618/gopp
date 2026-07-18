@@ -1,57 +1,23 @@
 package main
 
 import (
-	"strings"
 	"testing"
 )
+
+// Positive sema tests live here; negative tests (expected diagnostics)
+// live in tests/ui/*.gopp and run through TestUI (§12).
 
 func mustCheck(t *testing.T, path string) {
 	t.Helper()
 	f := mustParse(t, path)
-	if _, err := check(f); err != nil {
-		t.Fatalf("check %s: %v", path, err)
+	if _, diags := check(f); diags.HasErrors() {
+		t.Fatalf("check %s:\n%s", path, diags)
 	}
 }
 
 func TestCheckExamples(t *testing.T) {
 	mustCheck(t, "examples/hello.gopp")
 	mustCheck(t, "examples/features.gopp")
-}
-
-func wantErr(t *testing.T, src, want string) {
-	t.Helper()
-	toks, err := lex(src)
-	if err != nil {
-		t.Fatalf("lex: %v", err)
-	}
-	f, err := parse(toks)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	_, err = check(f)
-	if err == nil {
-		t.Fatalf("expected error containing %q, got none", want)
-	}
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("expected error containing %q, got %q", want, err.Error())
-	}
-}
-
-func TestSemaExhaustiveness(t *testing.T) {
-	wantErr(t, `package main
-enum Status {
-    Pending
-    Active
-    Failed(reason string)
-}
-func main() {
-    s := Active
-    match s {
-    Pending -> println("waiting")
-    Active -> println("live")
-    }
-}
-`, "non-exhaustive match on Status: missing Failed")
 }
 
 func TestSemaWildcardSilencesExhaustiveness(t *testing.T) {
@@ -72,39 +38,9 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := check(f); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, diags := check(f); diags.HasErrors() {
+		t.Fatalf("unexpected error:\n%s", diags)
 	}
-}
-
-func TestSemaUndefinedVar(t *testing.T) {
-	wantErr(t, `package main
-func main() {
-    println(nope)
-}
-`, "undefined: nope")
-}
-
-func TestSemaArgTypeMismatch(t *testing.T) {
-	wantErr(t, `package main
-func add(a int, b int) int {
-    return a + b
-}
-func main() {
-    println(add(1, "two"))
-}
-`, "cannot use string as int")
-}
-
-func TestSemaChannelArmGuardRejected(t *testing.T) {
-	wantErr(t, `package main
-func main() {
-    ch := chan[int](1)
-    match {
-    v := ch.recv() if v > 0 -> println(v)
-    }
-}
-`, "guards on channel arms")
 }
 
 func TestSemaResultBindingTypes(t *testing.T) {
@@ -127,24 +63,7 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := check(f); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, diags := check(f); diags.HasErrors() {
+		t.Fatalf("unexpected error:\n%s", diags)
 	}
-}
-
-func TestSemaGenericCtorNeedsArgs(t *testing.T) {
-	wantErr(t, `package main
-func main() {
-    r := Ok(1)
-    _ = r
-}
-`, "generic")
-}
-
-func TestSemaBreakLoopOutside(t *testing.T) {
-	wantErr(t, `package main
-func main() {
-    break loop
-}
-`, "break loop outside")
 }

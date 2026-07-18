@@ -1,0 +1,6 @@
+package main
+func f() int {
+    return 1
+    println("dead") //~ WARN unreachable code
+}
+func main() { println(f()) }

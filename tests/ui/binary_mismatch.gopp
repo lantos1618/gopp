@@ -1,0 +1,9 @@
+package main
+func main() {
+    z := 42 + "s" //~ ERROR invalid operation: int + string
+    println(z)
+    b := 1 < "x" //~ ERROR invalid comparison: int < string
+    println(b)
+    c := true && 1 //~ ERROR right side of && must be bool
+    println(c)
+}

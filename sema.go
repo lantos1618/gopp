@@ -6,17 +6,18 @@ import (
 )
 
 // sema.go — go++ v2 compiler: semantic analysis.
-// Name resolution, a real type system (incl. generic enum instantiation),
-// and compile-time exhaustiveness checking for match. Errors panic with
-// semaError and are recovered in check().
-
-type semaError struct{ msg string }
-
-func (e semaError) Error() string { return e.msg }
-
-func serr(line int, format string, args ...any) {
-	panic(semaError{fmt.Sprintf("line %d: %s", line, fmt.Sprintf(format, args...))})
-}
+//
+// Architecture (skeleton §0-§9):
+//   - two-phase collection: enums + function signatures first, bodies after
+//     (forward references work)
+//   - bidirectional type checking: checkExpr infers bottom-up, checkAgainst
+//     propagates an expected type top-down (§6)
+//   - tError poison: a failed check records one diagnostic and yields tError,
+//     which unifies silently with everything — one bug, one message (§4)
+//   - tNever bottom: divergence (panic) unifies with any type, so
+//     `Err(e) -> panic(e)` is a valid value-producing match arm (§4)
+//   - diagnostics are collected, never thrown: check() always returns
+//     partial results (§0/§11)
 
 // ---------- types ----------
 
@@ -81,6 +82,23 @@ type tVoid struct{}
 
 func (tVoid) String() string { return "void" }
 
+// tError is the poison type (§4): produced wherever a check failed. It
+// compares equal to everything so one mistake yields exactly one
+// diagnostic, never a cascade.
+type tError struct{}
+
+func (tError) String() string { return "<error>" }
+
+// tNever is the bottom type (§4): the type of diverging expressions
+// (panic). It unifies with everything, which is what lets
+// `if x { 1 } else { panic() }` and match arms that panic typecheck.
+type tNever struct{}
+
+func (tNever) String() string { return "!" }
+
+func isErr(t Type) bool   { _, ok := t.(tError); return ok }
+func isNever(t Type) bool { _, ok := t.(tNever); return ok }
+
 var (
 	tint      = tBasic{"int"}
 	tstring   = tBasic{"string"}
@@ -90,6 +108,7 @@ var (
 	tduration = tBasic{"duration"}
 	tvoid     = tVoid{}
 	tany      = tBasic{"any"}
+	terr      = tError{}
 )
 
 var basicTypes = map[string]bool{
@@ -101,6 +120,10 @@ var basicTypes = map[string]bool{
 }
 
 func sameType(a, b Type) bool {
+	// poison unifies silently with everything (§4)
+	if isErr(a) || isErr(b) {
+		return true
+	}
 	switch at := a.(type) {
 	case tBasic:
 		bt, ok := b.(tBasic)
@@ -133,6 +156,9 @@ func sameType(a, b Type) bool {
 		return ok && at.name == bt.name
 	case tVoid:
 		_, ok := b.(tVoid)
+		return ok
+	case tNever:
+		_, ok := b.(tNever)
 		return ok
 	}
 	return false
@@ -190,6 +216,7 @@ type ctorTarget struct {
 }
 
 type checker struct {
+	diag       *Diagnostics
 	enums      map[string]*EnumDecl
 	prelude    map[*EnumDecl]bool // synthetic prelude enums (Result, Option)
 	funcs      map[string]*tFunc
@@ -199,7 +226,7 @@ type checker struct {
 	cur        *scope
 	curResults []Type
 	loopDepth  int
-	// outputs for the emitter
+	// outputs for the emitter (side tables, §1)
 	types      map[Expr]Type
 	resolved   map[Expr]*ctorTarget // idents/call-funs that are variant references
 	patVariant map[Pattern]bool     // IdentPat that matches a unit variant (not a binding)
@@ -217,17 +244,12 @@ func preludeEnums() []*EnumDecl {
 	return []*EnumDecl{result, option}
 }
 
-func check(f *File) (c *checker, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			if se, ok := r.(semaError); ok {
-				err = se
-				return
-			}
-			panic(r)
-		}
-	}()
-	c = &checker{
+// check runs semantic analysis and ALWAYS returns partial results plus the
+// collected diagnostics (§0): the caller decides whether to proceed to
+// codegen (only when diags.HasErrors() is false).
+func check(f *File) (*checker, *Diagnostics) {
+	c := &checker{
+		diag:       &Diagnostics{},
 		enums:      map[string]*EnumDecl{},
 		prelude:    map[*EnumDecl]bool{},
 		funcs:      map[string]*tFunc{},
@@ -246,11 +268,12 @@ func check(f *File) (c *checker, err error) {
 	c.globals.vars["ms"] = tduration
 	c.globals.vars["second"] = tduration
 	c.globals.vars["minute"] = tduration
-	// register user enums
+	// pass 1: register user enums (duplicate -> error, keep first, continue)
 	for _, d := range f.Decls {
 		if e, ok := d.(*EnumDecl); ok {
 			if _, dup := c.enums[e.Name]; dup {
-				serr(e.Line, "duplicate type %s", e.Name)
+				c.diag.errorf(e.Line, "duplicate type %s", e.Name)
+				continue
 			}
 			c.enums[e.Name] = e
 		}
@@ -277,11 +300,12 @@ func check(f *File) (c *checker, err error) {
 			}
 		}
 	}
-	// function signatures
+	// pass 1.5: function signatures (no bodies — mutual recursion works)
 	for _, d := range f.Decls {
 		if fn, ok := d.(*FuncDecl); ok {
 			if _, dup := c.funcs[fn.Name]; dup {
-				serr(fn.Line, "duplicate function %s", fn.Name)
+				c.diag.errorf(fn.Line, "duplicate function %s", fn.Name)
+				continue
 			}
 			ft := &tFunc{}
 			for _, p := range fn.Params {
@@ -293,19 +317,26 @@ func check(f *File) (c *checker, err error) {
 			c.funcs[fn.Name] = ft
 		}
 	}
-	// function bodies
+	// pass 2: function bodies
 	for _, d := range f.Decls {
 		if fn, ok := d.(*FuncDecl); ok {
 			ft := c.funcs[fn.Name]
+			if ft == nil { // duplicate definition; first one was checked
+				continue
+			}
 			c.curResults = ft.results
 			c.cur = &scope{parent: c.globals, vars: map[string]Type{}}
 			for i, p := range fn.Params {
-				c.cur.vars[p.Name] = ft.params[i]
+				if i < len(ft.params) {
+					c.cur.vars[p.Name] = ft.params[i]
+				}
 			}
 			c.checkStmts(fn.Body.List)
 		}
 	}
-	return c, nil
+	// pass 3 (§9): flow checks over the typed bodies
+	c.checkFlow(f)
+	return c, c.diag
 }
 
 func (c *checker) resolveType(te TypeExpr) Type { return c.resolveTypeIn(te, nil) }
@@ -325,22 +356,27 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 		}
 		if e, ok := c.enums[t.Name]; ok {
 			if len(e.TypeParams) > 0 {
-				serr(t.Line, "enum %s is generic: use %s[%s]", t.Name, t.Name, strings.Join(e.TypeParams, ", "))
+				c.diag.errorf(t.Line, "enum %s is generic: use %s[%s]", t.Name, t.Name, strings.Join(e.TypeParams, ", "))
+				return terr
 			}
 			return &tEnum{decl: e}
 		}
-		serr(t.Line, "undefined type %s", t.Name)
+		c.diag.errorf(t.Line, "undefined type %s", t.Name)
+		return terr
 	case *IndexType:
 		base, ok := t.X.(*IdentType)
 		if !ok {
-			serr(t.Line, "invalid generic type")
+			c.diag.errorf(t.Line, "invalid generic type")
+			return terr
 		}
 		e, ok := c.enums[base.Name]
 		if !ok {
-			serr(t.Line, "%s is not a generic enum", base.Name)
+			c.diag.errorf(t.Line, "%s is not a generic enum", base.Name)
+			return terr
 		}
-		if len(e.TypeParams) != len(t.Args) {
-			serr(t.Line, "%s takes %d type argument(s), got %d", base.Name, len(e.TypeParams), len(t.Args))
+		if len(e.TypeParams) != len(t.Args) { // arity check (§5)
+			c.diag.errorf(t.Line, "%s takes %d type argument(s), got %d", base.Name, len(e.TypeParams), len(t.Args))
+			return terr
 		}
 		var args []Type
 		for _, a := range t.Args {
@@ -356,8 +392,8 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 	case *StarType:
 		return &tStar{c.resolveTypeIn(t.X, inEnum)}
 	}
-	serr(0, "unknown type expression")
-	return nil
+	c.diag.errorf(0, "unknown type expression")
+	return terr
 }
 
 // exprToType converts a parsed expression back into a type expression,
@@ -408,39 +444,53 @@ func (c *checker) checkStmt(s Stmt) {
 	case *VarStmt:
 		ty := c.resolveType(st.Type)
 		if st.Init != nil {
-			it := c.checkExpr(st.Init)
-			c.assignable(it, ty, st.Line)
+			c.checkAgainst(st.Init, ty, st.Line)
 		}
 		c.cur.vars[st.Name] = ty
 	case *AssignStmt:
 		if len(st.Lhs) != len(st.Rhs) {
-			serr(st.Line, "assignment mismatch: %d left, %d right", len(st.Lhs), len(st.Rhs))
+			c.diag.errorf(st.Line, "assignment mismatch: %d left, %d right", len(st.Lhs), len(st.Rhs))
+			return
 		}
 		for i := range st.Lhs {
-			rt := c.checkExpr(st.Rhs[i])
-			if mx, ok := st.Rhs[i].(*MatchExpr); ok && sameType(rt, tvoid) {
-				serr(mx.Line, "match in value context must produce a value in every arm")
-			}
 			if st.Op == ":=" {
+				rt := c.checkExpr(st.Rhs[i])
+				if mx, ok := st.Rhs[i].(*MatchExpr); ok && sameType(rt, tvoid) {
+					c.diag.errorf(mx.Line, "match in value context must produce a value in every arm")
+				}
 				id, ok := st.Lhs[i].(*Ident)
 				if !ok {
-					serr(st.Line, "left side of := must be a name")
+					c.diag.errorf(st.Line, "left side of := must be a name")
+					continue
 				}
 				if id.Name != "_" {
+					// shadowing policy (§3/§29): allowed across scopes,
+					// an error within the same scope (like Go).
+					if _, dup := c.cur.vars[id.Name]; dup {
+						c.diag.errorf(st.Line, "%s redeclared in this scope", id.Name)
+					}
 					c.cur.vars[id.Name] = rt
 				}
 			} else {
+				// the blank identifier is assignable to, never read
+				if id, ok := st.Lhs[i].(*Ident); ok && id.Name == "_" {
+					c.checkExpr(st.Rhs[i])
+					continue
+				}
 				lt := c.checkExpr(st.Lhs[i])
-				c.assignable(rt, lt, st.Line)
+				if st.Op == "=" {
+					c.checkAgainst(st.Rhs[i], lt, st.Line)
+				} else { // +=, -=, ...
+					rt := c.checkExpr(st.Rhs[i])
+					c.expect(rt, lt, st.Line)
+				}
 			}
 		}
 	case *ExprStmt:
 		c.checkExpr(st.X)
 	case *IfStmt:
 		ct := c.checkExpr(st.Cond)
-		if !sameType(ct, tbool) {
-			serr(st.Line, "if condition must be bool, got %s", ct)
-		}
+		c.expectBool(ct, st.Line, "if condition")
 		c.child()
 		c.checkStmts(st.Then.List)
 		c.pop()
@@ -454,9 +504,7 @@ func (c *checker) checkStmt(s Stmt) {
 		}
 		if st.Cond != nil {
 			ct := c.checkExpr(st.Cond)
-			if !sameType(ct, tbool) {
-				serr(st.Line, "for condition must be bool, got %s", ct)
-			}
+			c.expectBool(ct, st.Line, "for condition")
 		}
 		if st.Post != nil {
 			c.checkStmt(st.Post)
@@ -472,32 +520,29 @@ func (c *checker) checkStmt(s Stmt) {
 	case *BreakStmt:
 		if st.Label == "loop" {
 			if c.loopDepth == 0 {
-				serr(st.Line, "break loop outside of a loop block")
+				c.diag.errorf(st.Line, "break loop outside of a loop block")
 			}
 		} else if st.Label != "" {
-			serr(st.Line, "unknown label %s", st.Label)
+			c.diag.errorf(st.Line, "unknown label %s", st.Label)
 		}
 	case *ReturnStmt:
 		if len(c.curResults) == 0 {
 			if len(st.Results) != 0 {
-				serr(st.Line, "function has no results, return has %d", len(st.Results))
+				c.diag.errorf(st.Line, "function has no results, return has %d", len(st.Results))
 			}
 			return
 		}
 		if len(st.Results) != len(c.curResults) {
-			serr(st.Line, "return has %d value(s), function declares %d", len(st.Results), len(c.curResults))
+			c.diag.errorf(st.Line, "return has %d value(s), function declares %d", len(st.Results), len(c.curResults))
+			return
 		}
 		for i, r := range st.Results {
-			rt := c.checkExpr(r)
-			if mx, ok := r.(*MatchExpr); ok && sameType(rt, tvoid) {
-				serr(mx.Line, "match in value context must produce a value in every arm")
-			}
-			c.assignable(rt, c.curResults[i], st.Line)
+			c.checkAgainst(r, c.curResults[i], st.Line)
 		}
 	case *IncDecStmt:
 		xt := c.checkExpr(st.X)
-		if !isNumeric(xt) {
-			serr(st.Line, "%s needs a number, got %s", st.Op, xt)
+		if !isErr(xt) && !isNumeric(xt) {
+			c.diag.errorf(st.Line, "%s needs a number, got %s", st.Op, xt)
 		}
 	}
 }
@@ -514,18 +559,65 @@ func isNumeric(t Type) bool {
 	return false
 }
 
-func (c *checker) assignable(from, to Type, line int) {
-	if sameType(from, to) || sameType(to, tany) {
+func isFloat(t Type) bool {
+	if b, ok := t.(tBasic); ok {
+		return b.name == "float32" || b.name == "float64"
+	}
+	return false
+}
+
+// expect verifies `from` is assignable to `to`; silent when either side is
+// poisoned (§4) or `from` diverges (tNever unifies with everything).
+func (c *checker) expect(from, to Type, line int) {
+	if sameType(from, to) || isNever(from) || sameType(to, tany) {
 		return
 	}
-	// untyped constants flowing into numeric types
+	// untyped int constant flowing into a numeric type
 	if sameType(from, tint) && isNumeric(to) {
 		return
 	}
-	serr(line, "cannot use %s as %s", from, to)
+	c.diag.errorf(line, "expected %s, found %s", to, from)
+}
+
+func (c *checker) expectBool(t Type, line int, what string) {
+	if isErr(t) {
+		return
+	}
+	if !sameType(t, tbool) {
+		c.diag.errorf(line, "%s must be bool, got %s", what, t)
+	}
 }
 
 // ---------- expressions ----------
+
+// checkAgainst is CHECK mode (§6): verify e against an expected type,
+// pushing context downward. Integer/float literals adopt the expected
+// numeric type (literal defaulting, §7); match expressions check every
+// arm against it. Signatures and declarations are the blame boundaries.
+func (c *checker) checkAgainst(e Expr, expected Type, line int) Type {
+	if lit, ok := e.(*BasicLit); ok {
+		switch lit.Kind {
+		case kInt:
+			if isNumeric(expected) {
+				c.types[e] = expected
+				return expected
+			}
+		case kFloat:
+			if isFloat(expected) {
+				c.types[e] = expected
+				return expected
+			}
+		}
+	}
+	if mx, ok := e.(*MatchExpr); ok {
+		t := c.checkMatchWant(mx, expected)
+		c.types[e] = t // checkExpr records this; the CHECK path must too
+		return t
+	}
+	t := c.checkExpr(e)
+	c.expect(t, expected, line)
+	return t
+}
 
 func (c *checker) checkExprIn(e Expr, s *scope) Type {
 	save := c.cur
@@ -541,7 +633,7 @@ func (c *checker) checkExpr(e Expr) Type {
 	case *BasicLit:
 		switch ex.Kind {
 		case kInt:
-			ty = tint
+			ty = tint // unconstrained int literal defaults to int (§7)
 		case kFloat:
 			ty = tfloat64
 		case kString:
@@ -554,31 +646,62 @@ func (c *checker) checkExpr(e Expr) Type {
 	case *BinaryExpr:
 		xt := c.checkExpr(ex.X)
 		yt := c.checkExpr(ex.Y)
+		if isErr(xt) || isErr(yt) {
+			ty = terr
+			break
+		}
+		// no implicit conversions (§7): operands must agree
 		switch ex.Op {
-		case "==", "!=", "<", "<=", ">", ">=", "&&", "||":
+		case "&&", "||":
+			c.expectBool(xt, ex.Line, "left side of "+ex.Op)
+			c.expectBool(yt, ex.Line, "right side of "+ex.Op)
 			ty = tbool
-		case "+":
-			if sameType(xt, tstring) || sameType(yt, tstring) {
-				ty = tstring
+		case "==", "!=":
+			c.expect(yt, xt, ex.Line)
+			ty = tbool
+		case "<", "<=", ">", ">=":
+			if (isNumeric(xt) && isNumeric(yt)) || (sameType(xt, tstring) && sameType(yt, tstring)) {
+				ty = tbool
 			} else {
-				ty = arithType(xt, yt)
+				c.diag.errorf(ex.Line, "invalid comparison: %s %s %s", xt, ex.Op, yt)
+				ty = terr
 			}
-		default:
-			ty = arithType(xt, yt)
+		case "+":
+			if sameType(xt, tstring) && sameType(yt, tstring) {
+				ty = tstring
+			} else if isNumeric(xt) && isNumeric(yt) {
+				ty = arithType(xt, yt)
+			} else {
+				c.diag.errorf(ex.Line, "invalid operation: %s + %s (mismatched types)", xt, yt)
+				ty = terr
+			}
+		default: // -, *, /, %, bit ops, shifts
+			if isNumeric(xt) && isNumeric(yt) {
+				ty = arithType(xt, yt)
+			} else {
+				c.diag.errorf(ex.Line, "invalid operation: %s %s %s (mismatched types)", xt, ex.Op, yt)
+				ty = terr
+			}
 		}
 	case *UnaryExpr:
 		xt := c.checkExpr(ex.X)
-		switch ex.Op {
-		case "<-":
-			if ch, ok := xt.(*tChan); ok {
-				ty = ch.elem
-			} else {
-				serr(ex.Line, "cannot receive from non-channel %s", xt)
-			}
-		case "!":
-			ty = tbool
+		switch {
+		case isErr(xt):
+			ty = terr
 		default:
-			ty = xt
+			switch ex.Op {
+			case "<-":
+				if ch, ok := xt.(*tChan); ok {
+					ty = ch.elem
+				} else {
+					c.diag.errorf(ex.Line, "cannot receive from non-channel %s", xt)
+					ty = terr
+				}
+			case "!":
+				ty = tbool
+			default:
+				ty = xt
+			}
 		}
 	case *CallExpr:
 		ty = c.checkCall(ex)
@@ -590,15 +713,20 @@ func (c *checker) checkExpr(e Expr) Type {
 		et := c.resolveType(ex.Elem)
 		if ex.Cap != nil {
 			ct := c.checkExpr(ex.Cap)
-			if !isNumeric(ct) {
-				serr(ex.Line, "channel capacity must be a number, got %s", ct)
+			if !isErr(ct) && !isNumeric(ct) {
+				c.diag.errorf(ex.Line, "channel capacity must be a number, got %s", ct)
 			}
 		}
-		ty = &tChan{elem: et}
+		if isErr(et) {
+			ty = terr
+		} else {
+			ty = &tChan{elem: et}
+		}
 	case *MatchExpr:
-		ty = c.checkMatch(ex)
+		ty = c.checkMatchWant(ex, nil)
 	default:
-		serr(0, "unhandled expression %T", e)
+		c.diag.errorf(0, "unhandled expression %T", e)
+		ty = terr
 	}
 	c.types[e] = ty
 	return ty
@@ -627,12 +755,14 @@ func (c *checker) checkIdentValue(ex *Ident) Type {
 	}
 	if ct, ok := c.ctors[ex.Name]; ok {
 		if c.ambiguous[ex.Name] {
-			serr(ex.Line, "variant name %s is ambiguous (multiple enums)", ex.Name)
+			c.diag.errorf(ex.Line, "variant name %s is ambiguous (multiple enums)", ex.Name)
+			return terr
 		}
 		c.resolved[ex] = ct
 		et := &tEnum{decl: ct.enum}
 		if len(ct.enum.TypeParams) > 0 {
-			serr(ex.Line, "%s is generic; use explicit type arguments like %s[..](...)", ex.Name, ex.Name)
+			c.diag.errorf(ex.Line, "%s is generic; use explicit type arguments like %s[..](...)", ex.Name, ex.Name)
+			return terr
 		}
 		if len(ct.variant.Fields) == 0 {
 			return et // unit variant value
@@ -644,28 +774,35 @@ func (c *checker) checkIdentValue(ex *Ident) Type {
 		}
 		return ft
 	}
-	serr(ex.Line, "undefined: %s", ex.Name)
-	return nil
+	c.diag.errorf(ex.Line, "undefined: %s", ex.Name)
+	return terr
 }
 
 func (c *checker) checkCall(ex *CallExpr) Type {
 	switch fun := ex.Fun.(type) {
 	case *Ident:
 		switch fun.Name {
-		case "println", "print", "panic":
+		case "println", "print":
 			for _, a := range ex.Args {
 				c.checkExpr(a)
 			}
 			return tvoid
+		case "panic":
+			for _, a := range ex.Args {
+				c.checkExpr(a)
+			}
+			return tNever{} // diverges: unifies with any expected type (§4)
 		case "len", "cap":
 			if len(ex.Args) != 1 {
-				serr(ex.Line, "%s takes 1 argument", fun.Name)
+				c.diag.errorf(ex.Line, "%s takes 1 argument", fun.Name)
+				return terr
 			}
 			c.checkExpr(ex.Args[0])
 			return tint
 		case "append":
 			if len(ex.Args) < 1 {
-				serr(ex.Line, "append needs arguments")
+				c.diag.errorf(ex.Line, "append needs arguments")
+				return terr
 			}
 			return c.checkExpr(ex.Args[0])
 		}
@@ -679,88 +816,112 @@ func (c *checker) checkCall(ex *CallExpr) Type {
 		if ct, ok := c.ctors[fun.Name]; ok {
 			return c.callVariantCtor(ex, fun, ct, nil)
 		}
-		serr(ex.Line, "undefined function: %s", fun.Name)
+		c.diag.errorf(ex.Line, "undefined function: %s", fun.Name)
+		for _, a := range ex.Args {
+			c.checkExpr(a)
+		}
+		return terr
 	case *IndexExpr:
 		// generic constructor instantiation: Ok[int, string](v)
 		if id, ok := fun.X.(*Ident); ok {
 			if ct, ok := c.ctors[id.Name]; ok {
 				var args []Type
+				bad := false
 				for _, te := range fun.Index {
 					tt := exprToType(te)
 					if tt == nil {
-						serr(ex.Line, "invalid type argument")
+						c.diag.errorf(ex.Line, "invalid type argument")
+						bad = true
+						continue
 					}
 					args = append(args, c.resolveType(tt))
+				}
+				if bad {
+					return terr
 				}
 				return c.callVariantCtor(ex, id, ct, args)
 			}
 		}
-		serr(ex.Line, "not a generic constructor call")
+		c.diag.errorf(ex.Line, "not a generic constructor call")
+		return terr
 	case *SelectorExpr:
 		xt := c.checkExpr(fun.X)
+		if isErr(xt) {
+			return terr
+		}
 		if ch, ok := xt.(*tChan); ok {
 			switch fun.Sel {
 			case "send":
 				if len(ex.Args) != 1 {
-					serr(ex.Line, "send takes 1 argument")
+					c.diag.errorf(ex.Line, "send takes 1 argument")
+					return terr
 				}
-				vt := c.checkExpr(ex.Args[0])
-				c.assignable(vt, ch.elem, ex.Line)
+				c.checkAgainst(ex.Args[0], ch.elem, ex.Line)
 				return tvoid
 			case "recv":
 				if len(ex.Args) != 0 {
-					serr(ex.Line, "recv takes no arguments")
+					c.diag.errorf(ex.Line, "recv takes no arguments")
+					return terr
 				}
 				return ch.elem
 			case "close":
 				if len(ex.Args) != 0 {
-					serr(ex.Line, "close takes no arguments")
+					c.diag.errorf(ex.Line, "close takes no arguments")
+					return terr
 				}
 				return tvoid
 			case "closed":
-				serr(ex.Line, ".closed() is not supported in v2 (Go channels cannot peek)")
+				c.diag.errorf(ex.Line, ".closed() is not supported in v2 (Go channels cannot peek)")
+				return terr
 			}
-			serr(ex.Line, "channels have no method %s", fun.Sel)
+			c.diag.errorf(ex.Line, "channels have no method %s", fun.Sel)
+			return terr
 		}
 		if en, ok := xt.(*tEnum); ok && en.decl.Name == "Result" {
 			if fun.Sel == "IsOk" || fun.Sel == "IsErr" {
 				if len(ex.Args) != 0 {
-					serr(ex.Line, "%s takes no arguments", fun.Sel)
+					c.diag.errorf(ex.Line, "%s takes no arguments", fun.Sel)
+					return terr
 				}
 				return tbool
 			}
 		}
-		serr(ex.Line, "%s has no method %s", xt, fun.Sel)
+		c.diag.errorf(ex.Line, "%s has no method %s", xt, fun.Sel)
+		return terr
 	}
-	serr(ex.Line, "not callable")
-	return nil
+	c.diag.errorf(ex.Line, "not callable")
+	return terr
 }
 
 func (c *checker) callVariantCtor(ex *CallExpr, id *Ident, ct *ctorTarget, args []Type) Type {
 	if c.ambiguous[id.Name] {
-		serr(ex.Line, "variant name %s is ambiguous (multiple enums)", id.Name)
+		c.diag.errorf(ex.Line, "variant name %s is ambiguous (multiple enums)", id.Name)
+		return terr
 	}
 	if len(ct.enum.TypeParams) > 0 {
 		if args == nil {
-			serr(ex.Line, "%s is generic; use explicit type arguments like %s[..](...)", id.Name, id.Name)
+			c.diag.errorf(ex.Line, "%s is generic; use explicit type arguments like %s[..](...)", id.Name, id.Name)
+			return terr
 		}
-		if len(args) != len(ct.enum.TypeParams) {
-			serr(ex.Line, "%s takes %d type argument(s), got %d", id.Name, len(ct.enum.TypeParams), len(args))
+		if len(args) != len(ct.enum.TypeParams) { // arity (§5)
+			c.diag.errorf(ex.Line, "%s takes %d type argument(s), got %d", id.Name, len(ct.enum.TypeParams), len(args))
+			return terr
 		}
 	} else if args != nil {
-		serr(ex.Line, "%s is not generic", id.Name)
+		c.diag.errorf(ex.Line, "%s is not generic", id.Name)
+		return terr
 	}
 	et := &tEnum{decl: ct.enum, args: args}
 	if len(ex.Args) != len(ct.variant.Fields) {
-		serr(ex.Line, "%s takes %d value(s), got %d", id.Name, len(ct.variant.Fields), len(ex.Args))
+		c.diag.errorf(ex.Line, "%s takes %d value(s), got %d", id.Name, len(ct.variant.Fields), len(ex.Args))
+		return terr
 	}
 	for i, f := range ct.variant.Fields {
 		ft := c.resolveTypeIn(f.Type, ct.enum)
 		if args != nil {
 			ft = subst(ft, ct.enum.TypeParams, args)
 		}
-		at := c.checkExpr(ex.Args[i])
-		c.assignable(at, ft, ex.Line)
+		c.checkAgainst(ex.Args[i], ft, ex.Line)
 	}
 	c.resolved[id] = ct
 	return et
@@ -768,50 +929,62 @@ func (c *checker) callVariantCtor(ex *CallExpr, id *Ident, ct *ctorTarget, args 
 
 func (c *checker) checkCallArgs(ex *CallExpr, params []Type) {
 	if len(ex.Args) != len(params) {
-		serr(ex.Line, "expected %d argument(s), got %d", len(params), len(ex.Args))
+		c.diag.errorf(ex.Line, "expected %d argument(s), got %d", len(params), len(ex.Args))
+		return
 	}
 	for i := range ex.Args {
-		at := c.checkExpr(ex.Args[i])
-		c.assignable(at, params[i], ex.Line)
+		c.checkAgainst(ex.Args[i], params[i], ex.Line)
 	}
 }
 
 func (c *checker) checkSelector(ex *SelectorExpr) Type {
 	xt := c.checkExpr(ex.X)
+	if isErr(xt) {
+		return terr
+	}
 	if en, ok := xt.(*tEnum); ok && en.decl.Name == "Result" {
 		if ex.Sel == "IsOk" || ex.Sel == "IsErr" {
 			return &tFunc{results: []Type{tbool}}
 		}
 	}
-	serr(ex.Line, "%s has no field or method %s", xt, ex.Sel)
-	return nil
+	c.diag.errorf(ex.Line, "%s has no field or method %s", xt, ex.Sel)
+	return terr
 }
 
 func (c *checker) checkIndex(ex *IndexExpr) Type {
 	// generic instantiation in type position is handled by checkCall;
 	// here it's ordinary indexing.
 	xt := c.checkExpr(ex.X)
-	if len(ex.Index) != 1 {
-		serr(ex.Line, "expected 1 index")
+	if isErr(xt) {
+		return terr
 	}
-	it := c.checkExpr(ex.Index[0])
+	if len(ex.Index) != 1 {
+		c.diag.errorf(ex.Line, "expected 1 index")
+		return terr
+	}
 	switch t := xt.(type) {
 	case *tMap:
-		c.assignable(it, t.k, ex.Line)
+		c.checkAgainst(ex.Index[0], t.k, ex.Line)
 		return t.v
 	case *tSlice:
-		if !isNumeric(it) {
-			serr(ex.Line, "slice index must be a number, got %s", it)
+		it := c.checkExpr(ex.Index[0])
+		if !isErr(it) && !isNumeric(it) {
+			c.diag.errorf(ex.Line, "slice index must be a number, got %s", it)
 		}
 		return t.elem
 	}
-	serr(ex.Line, "cannot index %s", xt)
-	return nil
+	c.diag.errorf(ex.Line, "cannot index %s", xt)
+	return terr
 }
 
 // ---------- match ----------
 
-func (c *checker) checkMatch(ex *MatchExpr) Type {
+func (c *checker) checkMatch(ex *MatchExpr) Type { return c.checkMatchWant(ex, nil) }
+
+// checkMatchWant checks a match; want != nil is CHECK mode (§6): every
+// arm's expression is checked against the expected type, so blame lands on
+// the arm that disagrees with the context, not on the first arm.
+func (c *checker) checkMatchWant(ex *MatchExpr, want Type) Type {
 	hasChan := false
 	for _, a := range ex.Arms {
 		switch a.Pat.(type) {
@@ -820,12 +993,12 @@ func (c *checker) checkMatch(ex *MatchExpr) Type {
 		}
 	}
 	if hasChan {
-		return c.checkMatchSelect(ex)
+		return c.checkMatchSelect(ex, want)
 	}
 	if ex.Subject == nil {
-		return c.checkMatchBool(ex)
+		return c.checkMatchBool(ex, want)
 	}
-	return c.checkMatchSubject(ex)
+	return c.checkMatchSubject(ex, want)
 }
 
 func (c *checker) fieldType(en *tEnum, v *Variant, k int) Type {
@@ -869,9 +1042,17 @@ func patLine(p Pattern) int {
 	return 0
 }
 
-func (c *checker) checkArmBody(a *MatchArm) Type {
+// checkArmBody checks one arm body; in CHECK mode (want != nil) a
+// single-expression arm is verified against the expected type.
+func (c *checker) checkArmBody(a *MatchArm, want Type) Type {
 	if a.BodyExpr != nil {
+		if want != nil && !isErr(want) {
+			return c.checkAgainst(a.BodyExpr, want, a.Line)
+		}
 		return c.checkExpr(a.BodyExpr)
+	}
+	if want != nil && !isErr(want) {
+		c.diag.errorf(a.Line, "match in value context must produce a value in every arm")
 	}
 	c.child()
 	c.checkStmts(a.Body)
@@ -879,73 +1060,123 @@ func (c *checker) checkArmBody(a *MatchArm) Type {
 	return tvoid
 }
 
-func (c *checker) unify(cur, next Type, line int) Type {
+// unifyArms merges arm result types (§7): tError and tNever are absorbed
+// so a poisoned or diverging arm never masks the real result type.
+func (c *checker) unifyArms(cur, next Type, line int) Type {
 	if cur == nil {
 		return next
 	}
+	if isErr(cur) {
+		return next
+	}
+	if isErr(next) || isNever(next) {
+		return cur
+	}
+	if isNever(cur) {
+		return next
+	}
 	if !sameType(cur, next) {
-		serr(line, "match arms produce different types (%s vs %s)", cur, next)
+		c.diag.errorf(line, "match arms produce different types (%s vs %s)", cur, next)
 	}
 	return cur
 }
 
-func (c *checker) checkMatchSubject(ex *MatchExpr) Type {
+func (c *checker) checkMatchSubject(ex *MatchExpr, want Type) Type {
 	st := c.checkExpr(ex.Subject)
 	en, isEnum := st.(*tEnum)
 	covered := map[string]bool{}
+	seenLits := map[string]bool{}  // unguarded basic literals, for duplicate detection
 	hasWild := false
+	catchAll := false // an unguarded arm above matches everything (§9 usefulness)
 	var resultT Type
 	for i := range ex.Arms {
 		a := &ex.Arms[i]
 		c.child()
+		unguarded := a.Guard == nil
 		switch p := a.Pat.(type) {
 		case *WildcardPat:
-			hasWild = true
+			if catchAll {
+				c.diag.warnf(patLine(p), "unreachable pattern")
+			}
+			if unguarded {
+				hasWild = true
+				catchAll = true
+			}
 		case *VariantPat:
 			if !isEnum {
-				serr(patLine(p), "variant pattern %s on non-enum subject %s", p.Name, st)
-			}
-			v := findVariant(en.decl, p.Name)
-			if v == nil {
-				serr(patLine(p), "%s has no variant %s", en, p.Name)
-			}
-			if len(p.Bindings) != len(v.Fields) {
-				serr(patLine(p), "%s has %d field(s), pattern binds %d", p.Name, len(v.Fields), len(p.Bindings))
-			}
-			covered[p.Name] = true
-			for k, bd := range p.Bindings {
-				if bd != "_" {
-					c.cur.vars[bd] = c.fieldType(en, v, k)
+				if !isErr(st) {
+					c.diag.errorf(patLine(p), "variant pattern %s on non-enum subject %s", p.Name, st)
+				}
+			} else {
+				v := findVariant(en.decl, p.Name)
+				if v == nil {
+					c.diag.errorf(patLine(p), "%s has no variant %s", en, p.Name)
+				} else {
+					if len(p.Bindings) != len(v.Fields) {
+						c.diag.errorf(patLine(p), "%s has %d field(s), pattern binds %d", p.Name, len(v.Fields), len(p.Bindings))
+					}
+					if catchAll || covered[p.Name] {
+						c.diag.warnf(patLine(p), "unreachable pattern")
+					}
+					// guarded arms don't count toward coverage (§9):
+					// the guard may fail and control falls through.
+					if unguarded {
+						covered[p.Name] = true
+					}
+					for k, bd := range p.Bindings {
+						if bd != "_" && k < len(v.Fields) {
+							c.cur.vars[bd] = c.fieldType(en, v, k)
+						}
+					}
 				}
 			}
 		case *IdentPat:
 			if isEnum && findVariant(en.decl, p.Name) != nil {
 				v := findVariant(en.decl, p.Name)
 				if len(v.Fields) > 0 {
-					serr(patLine(p), "%s carries data; use %s(...) in the pattern", p.Name, p.Name)
+					c.diag.errorf(patLine(p), "%s carries data; use %s(...) in the pattern", p.Name, p.Name)
 				}
-				covered[p.Name] = true
+				if catchAll || covered[p.Name] {
+					c.diag.warnf(patLine(p), "unreachable pattern")
+				}
+				if unguarded {
+					covered[p.Name] = true
+				}
 				c.patVariant[p] = true
 			} else {
+				// a binding matches everything, like _ (§9)
+				if catchAll {
+					c.diag.warnf(patLine(p), "unreachable pattern")
+				}
+				if unguarded {
+					catchAll = true
+					hasWild = true
+				}
 				c.cur.vars[p.Name] = st
 			}
 		case *LiteralPat:
 			lt := c.checkExpr(p.X)
-			if !sameType(lt, st) {
-				serr(patLine(p), "pattern type %s does not match subject type %s", lt, st)
+			c.expect(lt, st, patLine(p))
+			if catchAll {
+				c.diag.warnf(patLine(p), "unreachable pattern")
+			}
+			if bl, ok := p.X.(*BasicLit); ok && unguarded {
+				key := fmt.Sprintf("%d:%s", bl.Kind, bl.Value)
+				if seenLits[key] {
+					c.diag.warnf(patLine(p), "unreachable pattern (duplicate)")
+				}
+				seenLits[key] = true
 			}
 		case *BoolPat:
-			serr(patLine(p), "'if' arms need a subject-less match")
+			c.diag.errorf(patLine(p), "'if' arms need a subject-less match")
 		default:
-			serr(patLine(p), "channel arm in a match with a subject")
+			c.diag.errorf(patLine(p), "channel arm in a match with a subject")
 		}
 		if a.Guard != nil {
 			gt := c.checkExpr(a.Guard)
-			if !sameType(gt, tbool) {
-				serr(a.Line, "guard must be bool, got %s", gt)
-			}
+			c.expectBool(gt, a.Line, "guard")
 		}
-		resultT = c.unify(resultT, c.checkArmBody(a), a.Line)
+		resultT = c.unifyArms(resultT, c.checkArmBody(a, want), a.Line)
 		c.pop()
 	}
 	if isEnum && !hasWild {
@@ -956,11 +1187,11 @@ func (c *checker) checkMatchSubject(ex *MatchExpr) Type {
 			}
 		}
 		if len(missing) > 0 {
-			serr(ex.Line, "non-exhaustive match on %s: missing %s", en, strings.Join(missing, ", "))
+			c.diag.errorf(ex.Line, "non-exhaustive match on %s: missing %s", en, strings.Join(missing, ", "))
 		}
 	}
-	if !isEnum && !hasWild {
-		serr(ex.Line, "match on %s needs a _ arm", st)
+	if !isEnum && !hasWild && !isErr(st) {
+		c.diag.errorf(ex.Line, "match on %s needs a _ arm", st)
 	}
 	if resultT == nil {
 		resultT = tvoid
@@ -968,9 +1199,9 @@ func (c *checker) checkMatchSubject(ex *MatchExpr) Type {
 	return resultT
 }
 
-func (c *checker) checkMatchSelect(ex *MatchExpr) Type {
+func (c *checker) checkMatchSelect(ex *MatchExpr, want Type) Type {
 	if ex.Subject != nil {
-		serr(ex.Line, "channel arms need a subject-less match")
+		c.diag.errorf(ex.Line, "channel arms need a subject-less match")
 	}
 	var resultT Type
 	for i := range ex.Arms {
@@ -979,36 +1210,35 @@ func (c *checker) checkMatchSelect(ex *MatchExpr) Type {
 		switch p := a.Pat.(type) {
 		case *RecvPat:
 			ct := c.checkExpr(p.Chan)
-			ch, ok := ct.(*tChan)
-			if !ok {
-				serr(patLine(p), "recv on non-channel %s", ct)
-			}
-			if p.Bind != "" && p.Bind != "_" {
-				c.cur.vars[p.Bind] = ch.elem
+			if ch, ok := ct.(*tChan); ok {
+				if p.Bind != "" && p.Bind != "_" {
+					c.cur.vars[p.Bind] = ch.elem
+				}
+			} else if !isErr(ct) {
+				c.diag.errorf(patLine(p), "recv on non-channel %s", ct)
 			}
 		case *SendPat:
 			ct := c.checkExpr(p.Chan)
-			ch, ok := ct.(*tChan)
-			if !ok {
-				serr(patLine(p), "send on non-channel %s", ct)
+			if ch, ok := ct.(*tChan); ok {
+				c.checkAgainst(p.Value, ch.elem, patLine(p))
+			} else if !isErr(ct) {
+				c.diag.errorf(patLine(p), "send on non-channel %s", ct)
 			}
-			vt := c.checkExpr(p.Value)
-			c.assignable(vt, ch.elem, patLine(p))
 		case *AfterPat:
 			dt := c.checkExpr(p.D)
-			if !isNumeric(dt) {
-				serr(patLine(p), "after() duration must be numeric, got %s", dt)
+			if !isErr(dt) && !isNumeric(dt) {
+				c.diag.errorf(patLine(p), "after() duration must be numeric, got %s", dt)
 			}
 		case *ClosedPat:
-			serr(patLine(p), ".closed() arms are not supported in v2 (Go channels cannot peek)")
+			c.diag.errorf(patLine(p), ".closed() arms are not supported in v2 (Go channels cannot peek)")
 		case *WildcardPat:
 		default:
-			serr(patLine(p), "cannot mix channel arms with value/enum arms")
+			c.diag.errorf(patLine(p), "cannot mix channel arms with value/enum arms")
 		}
 		if a.Guard != nil {
-			serr(a.Line, "guards on channel arms are not supported in v2")
+			c.diag.errorf(a.Line, "guards on channel arms are not supported in v2")
 		}
-		resultT = c.unify(resultT, c.checkArmBody(a), a.Line)
+		resultT = c.unifyArms(resultT, c.checkArmBody(a, want), a.Line)
 		c.pop()
 	}
 	if resultT == nil {
@@ -1017,29 +1247,61 @@ func (c *checker) checkMatchSelect(ex *MatchExpr) Type {
 	return resultT
 }
 
-func (c *checker) checkMatchBool(ex *MatchExpr) Type {
+func (c *checker) checkMatchBool(ex *MatchExpr, want Type) Type {
 	var resultT Type
+	catchAll := false
 	for i := range ex.Arms {
 		a := &ex.Arms[i]
 		c.child()
 		switch p := a.Pat.(type) {
 		case *BoolPat:
-			bt := c.checkExpr(p.X)
-			if !sameType(bt, tbool) {
-				serr(patLine(p), "boolean arm must be bool, got %s", bt)
+			if catchAll {
+				c.diag.warnf(patLine(p), "unreachable pattern")
 			}
+			bt := c.checkExpr(p.X)
+			c.expectBool(bt, patLine(p), "boolean arm")
 		case *WildcardPat:
+			if catchAll {
+				c.diag.warnf(patLine(p), "unreachable pattern")
+			}
+			catchAll = true
 		default:
-			serr(patLine(p), "subject-less match arms must be channel patterns, 'if' conditions, or '_'")
+			c.diag.errorf(patLine(p), "subject-less match arms must be channel patterns, 'if' conditions, or '_'")
 		}
 		if a.Guard != nil {
-			serr(a.Line, "guards on boolean arms are not supported")
+			c.diag.errorf(a.Line, "guards on boolean arms are not supported")
 		}
-		resultT = c.unify(resultT, c.checkArmBody(a), a.Line)
+		resultT = c.unifyArms(resultT, c.checkArmBody(a, want), a.Line)
 		c.pop()
 	}
 	if resultT == nil {
 		resultT = tvoid
 	}
 	return resultT
+}
+
+// ---------- helpers for diagnostics from other passes ----------
+
+// diagFromError folds a lex/parse error (format "line N: msg") into the
+// diagnostics collection.
+func diagFromError(d *Diagnostics, err error) {
+	line, msg := splitLinePrefix(err.Error())
+	d.add(sevErr, line, msg)
+}
+
+func splitLinePrefix(msg string) (int, string) {
+	const p = "line "
+	if !strings.HasPrefix(msg, p) {
+		return 0, msg
+	}
+	rest := msg[len(p):]
+	i := strings.Index(rest, ": ")
+	if i < 0 {
+		return 0, msg
+	}
+	var n int
+	if _, err := fmt.Sscanf(rest[:i], "%d", &n); err != nil {
+		return 0, msg
+	}
+	return n, rest[i+2:]
 }

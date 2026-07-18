@@ -204,6 +204,12 @@ func (e *emitter) emitFunc(fn *FuncDecl) {
 func (e *emitter) emitStmts(list []Stmt) {
 	for _, s := range list {
 		e.emitStmt(s)
+		// drop dead code after a diverging statement: sema already warned
+		// about it (§9), and Go would reject a function that doesn't END
+		// in a terminating statement even when a return appears earlier.
+		if e.c.stmtDiverges(s) {
+			return
+		}
 	}
 }
 
@@ -277,7 +283,11 @@ func (e *emitter) emitStmt(s Stmt) {
 	case *LoopStmt:
 		label := e.tmpName("loop")
 		e.loops = append(e.loops, label)
-		e.s("%s: for {\n", label)
+		if bodyHasBreakLoop(st.Body.List) {
+			e.s("%s: for {\n", label) // label only when a `break loop` uses it
+		} else {
+			e.s("for {\n")
+		}
 		e.emitStmts(st.Body.List)
 		e.s("}\n")
 		e.loops = e.loops[:len(e.loops)-1]
@@ -440,7 +450,13 @@ func (e *emitter) armBody(a *MatchArm, valueCtx bool) {
 			return
 		}
 		if valueCtx {
-			e.s("return %s\n", e.expr(a.BodyExpr))
+			if isNever(e.c.types[a.BodyExpr]) {
+				// diverging arm (e.g. panic): a statement, not a return —
+				// sema's tNever already proved the other arms produce the value
+				e.s("%s\n", e.expr(a.BodyExpr))
+			} else {
+				e.s("return %s\n", e.expr(a.BodyExpr))
+			}
 		} else {
 			e.s("%s\n", e.expr(a.BodyExpr))
 		}
@@ -461,6 +477,7 @@ func (e *emitter) emitSelect(m *MatchExpr, valueCtx bool) {
 				e.s("case <-%s:\n", e.expr(p.Chan))
 			} else {
 				e.s("case %s := <-%s:\n", p.Bind, e.expr(p.Chan))
+				e.s("_ = %s\n", p.Bind) // unused recv bindings are legal in go++
 			}
 		case *SendPat:
 			e.s("case %s <- %s:\n", e.expr(p.Chan), e.expr(p.Value))
@@ -507,6 +524,7 @@ func (e *emitter) emitSubjectChain(m *MatchExpr, valueCtx bool) {
 				}
 				uniq := e.tmpName("b")
 				e.s("%s := %s.%s\n", uniq, mv, e.fieldGo(v, v.Fields[k], k))
+				e.s("_ = %s\n", uniq)
 				renameArm(a, bd, uniq)
 			}
 		case *IdentPat:
@@ -515,6 +533,7 @@ func (e *emitter) emitSubjectChain(m *MatchExpr, valueCtx bool) {
 			}
 			uniq := e.tmpName("b")
 			e.s("%s := %s\n", uniq, mv)
+			e.s("_ = %s\n", uniq)
 			renameArm(a, p.Name, uniq)
 		}
 	}
@@ -551,11 +570,13 @@ func (e *emitter) emitSubjectChain(m *MatchExpr, valueCtx bool) {
 				for k, bd := range p.Bindings {
 					if bd != "_" {
 						e.s("%s := %s.%s\n", bd, mv, e.fieldGo(v, v.Fields[k], k))
+						e.s("_ = %s\n", bd) // Go errors on unused bindings; go++ allows them
 					}
 				}
 			case *IdentPat:
 				if !e.c.patVariant[p] && p.Name != "_" {
 					e.s("%s := %s\n", p.Name, mv)
+					e.s("_ = %s\n", p.Name)
 				}
 			}
 		}

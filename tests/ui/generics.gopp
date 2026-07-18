@@ -1,0 +1,9 @@
+package main
+func main() {
+    r := Ok(1) //~ ERROR Ok is generic
+    _ = r
+    o := Ok[int, string](1, 2) //~ ERROR Ok takes 1 value(s), got 2
+    _ = o
+    q := Ok[int](1) //~ ERROR Ok takes 2 type argument(s), got 1
+    _ = q
+}
