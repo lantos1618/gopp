@@ -1,0 +1,25 @@
+package main
+
+type Point struct {
+    X int
+    Y int
+}
+
+type User struct {
+    ID   int
+    Name string
+}
+
+func dist2(p Point) int {
+    return p.X*p.X + p.Y*p.Y
+}
+
+func main() {
+    p := Point{X: 3, Y: 4}
+    println(dist2(p))
+    u := User{1, "gopher"}
+    u.ID = u.ID + 1
+    println(u.ID, u.Name)
+    var q Point
+    println(q.X, q.Y)
+}

@@ -1,0 +1,12 @@
+package main
+type Node struct { //~ ERROR recursive type has infinite size: Node contains itself
+    Next Node
+    V int
+}
+type A struct { //~ ERROR recursive type has infinite size: A contains itself
+    B B
+}
+type B struct {
+    A A
+}
+func main() {}

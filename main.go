@@ -49,9 +49,11 @@ func main() {
 		diagFromError(diags, err)
 		printDiags(diags)
 	}
-	file, err := parse(toks)
-	if err != nil {
-		diagFromError(diags, err)
+	file, parseDiags := parse(toks)
+	diags.items = append(diags.items, parseDiags.items...)
+	if diags.HasErrors() {
+		// syntax errors: report them all, but don't run sema on a
+		// partial AST — the follow-on noise helps nobody
 		printDiags(diags)
 	}
 	chk, semDiags := check(file)

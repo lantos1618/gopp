@@ -1,0 +1,38 @@
+package main
+
+// positive cases: untyped literals adopt, explicit conversions mix widths.
+// This file must produce ZERO diagnostics (any would fail the suite).
+func main() {
+    var a int8 = 127
+    var b int8 = -128
+    var u uint64 = 0xFFFFFFFFFFFFFFFF
+    var f float32 = 1.5
+    var f2 float64 = 5
+    x := 42
+    y := x + 1
+    big := int64(a) + int64(x)
+    mixed := a + int8(2)
+    r := rune(97)
+    s := string(r)
+    same := int(7)
+    fl := 1.5 + 2
+    fl2 := f + 0.5
+    cmp := a < 100
+    m := match x {
+        1 -> int8(10)
+        _ -> 20
+    }
+    _ = b
+    _ = u
+    _ = f2
+    _ = y
+    _ = big
+    _ = mixed
+    _ = s
+    _ = same
+    _ = fl
+    _ = fl2
+    _ = cmp
+    _ = m
+    _ = f
+}

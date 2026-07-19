@@ -1,0 +1,9 @@
+package main
+func broken( { //~ ERROR expected type
+    x :=
+}
+func good() int {
+    y := 5 + //~ ERROR expected expression
+    z := 10
+    return z
+}

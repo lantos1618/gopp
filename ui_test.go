@@ -58,9 +58,9 @@ func runUIFile(src string) *Diagnostics {
 		diagFromError(diags, err)
 		return diags
 	}
-	f, err := parse(toks)
-	if err != nil {
-		diagFromError(diags, err)
+	f, parseDiags := parse(toks)
+	diags.items = append(diags.items, parseDiags.items...)
+	if diags.HasErrors() {
 		return diags
 	}
 	_, sd := check(f)

@@ -4,6 +4,6 @@ func add(a int, b int) int {
 }
 func main() {
     println(add(1, "two")) //~ ERROR expected int, found string
-    var x string = 5 //~ ERROR expected string, found int
+    var x string = 5 //~ ERROR expected string, found untyped int
     println(x)
 }

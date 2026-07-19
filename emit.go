@@ -16,10 +16,11 @@ import (
 //   - loop { }      -> labeled for; break loop -> break label
 
 type emitter struct {
-	c     *checker
-	buf   strings.Builder
-	tmp   int
-	loops []string
+	c          *checker
+	buf        strings.Builder
+	tmp        int
+	loops      []string
+	curResults []Type // enclosing function's results (for ? desugars)
 }
 
 func emit(f *File, c *checker) string {
@@ -29,6 +30,8 @@ func emit(f *File, c *checker) string {
 		switch dd := d.(type) {
 		case *EnumDecl:
 			e.emitEnum(dd)
+		case *StructDecl:
+			e.emitStruct(dd)
 		case *FuncDecl:
 			e.emitFunc(dd)
 		}
@@ -64,6 +67,8 @@ func (e *emitter) typeGo(t Type) string {
 			parts[i] = e.typeGo(a)
 		}
 		return tt.decl.Name + "[" + strings.Join(parts, ", ") + "]"
+	case *tStruct:
+		return tt.decl.Name
 	case *tMap:
 		return "map[" + e.typeGo(tt.k) + "]" + e.typeGo(tt.v)
 	case *tChan:
@@ -108,6 +113,16 @@ func (e *emitter) typeExprGo(te TypeExpr) string {
 		return "*" + e.typeExprGo(t.X)
 	}
 	return "any"
+}
+
+// ---------- structs ----------
+
+func (e *emitter) emitStruct(d *StructDecl) {
+	e.s("type %s struct {\n", d.Name)
+	for _, f := range d.Fields {
+		e.s("%s %s\n", f.Name, e.typeExprGo(f.Type))
+	}
+	e.s("}\n\n")
 }
 
 // ---------- enums ----------
@@ -175,9 +190,28 @@ func (e *emitter) emitEnum(d *EnumDecl) {
 	e.s("\n")
 }
 
+// emitTry desugars `x := f()?` (spec §7) at statement level:
+//
+//	__gopp_tryN := f()
+//	if __gopp_tryN.IsErr() { return Err[Rt, Re](__gopp_tryN.__gopp_F_Err_v0) }
+//	<bind>(__gopp_tryN.__gopp_F_Ok_v0)
+//
+// No wrapping block: the binding must land in the current scope. Sema
+// (checkTry) has already proven the function returns a matching Result.
+func (e *emitter) emitTry(te *TryExpr, bind func(tmp string)) {
+	tmp := e.tmpName("try")
+	e.s("%s := %s\n", tmp, e.expr(te.X))
+	rt := e.curResults[0].(*tEnum) // checkTry guaranteed Result[T, E]
+	e.s("if %s.IsErr() {\n", tmp)
+	e.s("return Err[%s, %s](%s.__gopp_F_Err_v0)\n", e.typeGo(rt.args[0]), e.typeGo(rt.args[1]), tmp)
+	e.s("}\n")
+	bind(tmp)
+}
+
 // ---------- functions ----------
 
 func (e *emitter) emitFunc(fn *FuncDecl) {
+	e.curResults = e.c.funcs[fn.Name].results
 	var params []string
 	for _, p := range fn.Params {
 		params = append(params, p.Name+" "+e.typeExprGo(p.Type))
@@ -221,16 +255,29 @@ func (e *emitter) emitStmt(s Stmt) {
 		e.s("}\n")
 	case *VarStmt:
 		ty := e.typeExprGo(st.Type)
-		switch {
-		case st.Init != nil:
-			e.s("var %s %s = %s\n", st.Name, ty, e.expr(st.Init))
-		case st.Type.(*MapType) != nil:
+		if st.Init != nil {
+			if te, ok := st.Init.(*TryExpr); ok {
+				e.emitTry(te, func(tmp string) {
+					e.s("var %s %s = %s.__gopp_F_Ok_v0\n", st.Name, ty, tmp)
+				})
+			} else {
+				e.s("var %s %s = %s\n", st.Name, ty, e.expr(st.Init))
+			}
+		} else if _, isMap := st.Type.(*MapType); isMap {
 			// go++ maps are instantiated on declaration — no nil maps
 			e.s("var %s %s = make(%s)\n", st.Name, ty, ty)
-		default:
+		} else {
 			e.s("var %s %s\n", st.Name, ty)
 		}
 	case *AssignStmt:
+		if len(st.Lhs) == 1 && len(st.Rhs) == 1 {
+			if te, ok := st.Rhs[0].(*TryExpr); ok {
+				e.emitTry(te, func(tmp string) {
+					e.s("%s %s %s.__gopp_F_Ok_v0\n", e.expr(st.Lhs[0]), st.Op, tmp)
+				})
+				return
+			}
+		}
 		lhs := make([]string, len(st.Lhs))
 		for i, l := range st.Lhs {
 			lhs[i] = e.expr(l)
@@ -243,6 +290,10 @@ func (e *emitter) emitStmt(s Stmt) {
 	case *ExprStmt:
 		if m, ok := st.X.(*MatchExpr); ok {
 			e.emitMatch(m, false)
+			return
+		}
+		if te, ok := st.X.(*TryExpr); ok {
+			e.emitTry(te, func(tmp string) {})
 			return
 		}
 		e.s("%s\n", e.expr(st.X))
@@ -335,8 +386,8 @@ func (e *emitter) expr(x Expr) string {
 		return ex.Value
 	case *Ident:
 		if ct, ok := e.c.resolved[ex]; ok {
-			// unit variant value: Active -> Status_Active()
-			return e.ctorRef(ct, nil) + "()"
+			// unit variant value: Active -> Status_Active(), None -> None[int]()
+			return e.ctorRef(ct, e.typeArgsGo(e.c.inferred[ex])) + "()"
 		}
 		return ex.Name
 	case *BinaryExpr:
@@ -346,6 +397,10 @@ func (e *emitter) expr(x Expr) string {
 	case *CallExpr:
 		return e.call(ex)
 	case *SelectorExpr:
+		// (*p).Field — a bare unary operand would bind the selector first
+		if _, isUnary := ex.X.(*UnaryExpr); isUnary {
+			return "(" + e.expr(ex.X) + ")." + ex.Sel
+		}
 		return e.expr(ex.X) + "." + ex.Sel
 	case *IndexExpr:
 		if id, ok := ex.X.(*Ident); ok {
@@ -371,6 +426,16 @@ func (e *emitter) expr(x Expr) string {
 		return fmt.Sprintf("make(chan %s)", et)
 	case *MatchExpr:
 		return e.capture(func() { e.emitMatch(ex, true) })
+	case *StructLitExpr:
+		parts := make([]string, len(ex.Fields))
+		for i, fv := range ex.Fields {
+			if fv.Name != "" {
+				parts[i] = fv.Name + ": " + e.expr(fv.Value)
+			} else {
+				parts[i] = e.expr(fv.Value)
+			}
+		}
+		return e.typeExprGo(ex.Type) + "{" + strings.Join(parts, ", ") + "}"
 	}
 	return "/* unhandled expr */"
 }
@@ -386,6 +451,19 @@ func (e *emitter) ctorRef(ct *ctorTarget, typeArgs []string) string {
 		return name + "[" + strings.Join(typeArgs, ", ") + "]"
 	}
 	return name
+}
+
+// typeArgsGo renders inferred type arguments for a constructor reference
+// (nil for explicit or non-generic ctors — the reference stays bare).
+func (e *emitter) typeArgsGo(ts []Type) []string {
+	if len(ts) == 0 {
+		return nil
+	}
+	out := make([]string, len(ts))
+	for i, t := range ts {
+		out[i] = e.typeGo(t)
+	}
+	return out
 }
 
 func (e *emitter) call(ex *CallExpr) string {
@@ -409,7 +487,8 @@ func (e *emitter) call(ex *CallExpr) string {
 		return e.expr(fun.X) + "." + fun.Sel + "(" + argStr + ")"
 	case *Ident:
 		if ct, ok := e.c.resolved[fun]; ok {
-			return e.ctorRef(ct, nil) + "(" + argStr + ")"
+			// inferred type args ride along: Ok(1) -> Ok[int, string](1)
+			return e.ctorRef(ct, e.typeArgsGo(e.c.inferred[fun])) + "(" + argStr + ")"
 		}
 		return fun.Name + "(" + argStr + ")"
 	default:

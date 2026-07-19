@@ -15,9 +15,9 @@ func mustParse(t *testing.T, path string) *File {
 	if err != nil {
 		t.Fatalf("lex %s: %v", path, err)
 	}
-	f, err := parse(toks)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+	f, diags := parse(toks)
+	if diags.HasErrors() {
+		t.Fatalf("parse %s:\n%s", path, diags)
 	}
 	return f
 }
@@ -103,9 +103,9 @@ func f() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := parse(toks)
-	if err != nil {
-		t.Fatal(err)
+	f, diags := parse(toks)
+	if diags.HasErrors() {
+		t.Fatal(diags)
 	}
 	fn := f.Decls[0].(*FuncDecl)
 	m := fn.Body.List[0].(*ExprStmt).X.(*MatchExpr)

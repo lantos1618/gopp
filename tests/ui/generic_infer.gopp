@@ -1,0 +1,29 @@
+package main
+
+// generic constructor inference (§8-lite): context + value arguments
+// solve the type parameters. Zero diagnostics expected.
+func mk() Result[int, string] {
+    return Ok(1)
+}
+func fail() Result[int, string] {
+    return Err("boom")
+}
+func maybe() Option[int] {
+    return None
+}
+func main() {
+    var r Result[int, string] = Ok(1)
+    _ = r
+    var e Result[int, string] = Err("x")
+    _ = e
+    var o Option[int] = None
+    _ = o
+    var s Option[string] = Some("x")
+    _ = s
+    var nested Result[Result[int, string], string] = Ok(mk())
+    _ = nested
+    var wide Result[int64, string] = Ok(300)
+    _ = wide
+    _ = fail()
+    _ = maybe()
+}

@@ -314,6 +314,12 @@ func (c *checker) scanExpr(e Expr) {
 		for _, ix := range ex.Index {
 			c.scanExpr(ix)
 		}
+	case *StructLitExpr:
+		for _, fv := range ex.Fields {
+			c.scanExpr(fv.Value)
+		}
+	case *TryExpr:
+		c.scanExpr(ex.X)
 	}
 }
 

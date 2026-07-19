@@ -1,0 +1,8 @@
+package main
+func f(e error) int { return 0 } //~ ERROR undefined type error
+func g() int {
+    var x any = 1 //~ ERROR undefined type any
+    _ = x
+    return 0
+}
+func main() {}

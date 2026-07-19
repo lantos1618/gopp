@@ -1,0 +1,36 @@
+package main
+
+// the spec §7 example: ? desugars to the nested match propagation
+func fetchUser(id int) Result[int, string] {
+    if id < 0 { return Err[int, string]("negative id") }
+    return Ok[int, string](id * 10)
+}
+
+func fetchPerms(u int) Result[int, string] {
+    if u > 100 { return Err[int, string]("too many") }
+    return Ok[int, string](u + 1)
+}
+
+func build(id int) Result[int, string] {
+    u := fetchUser(id)?
+    p := fetchPerms(u)?
+    return Ok[int, string](u + p)
+}
+
+func show(r Result[int, string]) string {
+    return match r {
+    Ok(v) -> "ok"
+    Err(e) -> "err: " + e
+    }
+}
+
+func main() {
+    println(show(build(5)))
+    println(show(build(-1)))
+    println(show(build(20)))
+    b := build(3)
+    match b {
+    Ok(v) -> println("direct:", v)
+    Err(e) -> println("nope")
+    }
+}

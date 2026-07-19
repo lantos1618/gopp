@@ -19,9 +19,9 @@ func compileAndRun(t *testing.T, srcPath string) string {
 	if err != nil {
 		t.Fatalf("lex: %v", err)
 	}
-	file, err := parse(toks)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+	file, parseDiags := parse(toks)
+	if parseDiags.HasErrors() {
+		t.Fatalf("parse:\n%s", parseDiags)
 	}
 	chk, diags := check(file)
 	if diags.HasErrors() {
@@ -58,5 +58,21 @@ func TestEndToEndFeatures(t *testing.T) {
 	want := "0\n1\n2\nbig\ngot 42\nwarm\nzero\nmany\nmedium\ntimeout\n90\n"
 	if got != want {
 		t.Fatalf("features.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestEndToEndStructs(t *testing.T) {
+	got := compileAndRun(t, "examples/structs.gopp")
+	want := "25\n2 gopher\n0 0\n"
+	if got != want {
+		t.Fatalf("structs.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestEndToEndTry(t *testing.T) {
+	got := compileAndRun(t, "examples/try.gopp")
+	want := "ok\nerr: negative id\nerr: too many\ndirect: 61\n"
+	if got != want {
+		t.Fatalf("try.gopp output:\n got %q\nwant %q", got, want)
 	}
 }

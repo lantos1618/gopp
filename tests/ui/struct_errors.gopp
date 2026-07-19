@@ -1,0 +1,15 @@
+package main
+type P struct {
+    X int
+    Y int
+}
+func main() {
+    p := P{X: "s", Y: 2} //~ ERROR expected int, found string
+    println(p.Z) //~ ERROR P has no field Z
+    q := P{1} //~ ERROR too few values in P literal: 1 of 2 fields
+    r := P{1, 2, 3} //~ ERROR too many values in P literal (2 fields)
+    s := P{X: 1, X: 2} //~ ERROR duplicate field X in literal
+    m := P{1, X: 2} //~ ERROR cannot mix positional and keyed fields
+    n := P{Z: 1} //~ ERROR P has no field Z
+    println(q, r, s, m, n)
+}

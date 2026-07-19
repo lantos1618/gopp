@@ -1,6 +1,6 @@
 package main
 func main() {
-    r := Ok(1) //~ ERROR Ok is generic
+    r := Ok(1) //~ ERROR cannot infer type argument E for Ok
     _ = r
     o := Ok[int, string](1, 2) //~ ERROR Ok takes 1 value(s), got 2
     _ = o

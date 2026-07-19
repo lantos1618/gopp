@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -41,6 +43,10 @@ func (t *tEnum) String() string {
 	}
 	return t.decl.Name + "[" + strings.Join(parts, ", ") + "]"
 }
+
+type tStruct struct{ decl *StructDecl } // nominal: identity is the decl
+
+func (t *tStruct) String() string { return t.decl.Name }
 
 type tMap struct{ k, v Type }
 
@@ -96,6 +102,29 @@ type tNever struct{}
 
 func (tNever) String() string { return "!" }
 
+// tUntypedInt / tUntypedFloat are the types of numeric literals before
+// context pins them down (§7). CHECK mode adopts the expected numeric type
+// (with an overflow check); unconstrained use defaults via defaultType
+// (int / float64). They never appear in declarations.
+type tUntypedInt struct{}
+
+func (tUntypedInt) String() string { return "untyped int" }
+
+type tUntypedFloat struct{}
+
+func (tUntypedFloat) String() string { return "untyped float" }
+
+// defaultType pins an unconstrained untyped literal to its default (§7).
+func defaultType(t Type) Type {
+	switch t.(type) {
+	case tUntypedInt:
+		return tint
+	case tUntypedFloat:
+		return tfloat64
+	}
+	return t
+}
+
 func isErr(t Type) bool   { _, ok := t.(tError); return ok }
 func isNever(t Type) bool { _, ok := t.(tNever); return ok }
 
@@ -107,16 +136,17 @@ var (
 	trune     = tBasic{"rune"}
 	tduration = tBasic{"duration"}
 	tvoid     = tVoid{}
-	tany      = tBasic{"any"}
 	terr      = tError{}
 )
 
+// basicTypes are the types nameable in go++ source. error and any are
+// deliberately absent (spec §5): failures are Result[T, E], absence is
+// Option[T]. Emitted Go code still uses any for generic instantiations.
 var basicTypes = map[string]bool{
 	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
 	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
 	"uintptr": true, "byte": true, "rune": true,
 	"string": true, "bool": true, "float32": true, "float64": true,
-	"error": true, "any": true, "complex64": true, "complex128": true,
 }
 
 func sameType(a, b Type) bool {
@@ -139,6 +169,9 @@ func sameType(a, b Type) bool {
 			}
 		}
 		return true
+	case *tStruct:
+		bt, ok := b.(*tStruct)
+		return ok && at.decl == bt.decl
 	case *tMap:
 		bt, ok := b.(*tMap)
 		return ok && sameType(at.k, bt.k) && sameType(at.v, bt.v)
@@ -159,6 +192,12 @@ func sameType(a, b Type) bool {
 		return ok
 	case tNever:
 		_, ok := b.(tNever)
+		return ok
+	case tUntypedInt:
+		_, ok := b.(tUntypedInt)
+		return ok
+	case tUntypedFloat:
+		_, ok := b.(tUntypedFloat)
 		return ok
 	}
 	return false
@@ -218,6 +257,7 @@ type ctorTarget struct {
 type checker struct {
 	diag       *Diagnostics
 	enums      map[string]*EnumDecl
+	structs    map[string]*StructDecl
 	prelude    map[*EnumDecl]bool // synthetic prelude enums (Result, Option)
 	funcs      map[string]*tFunc
 	ctors      map[string]*ctorTarget
@@ -229,7 +269,9 @@ type checker struct {
 	// outputs for the emitter (side tables, §1)
 	types      map[Expr]Type
 	resolved   map[Expr]*ctorTarget // idents/call-funs that are variant references
+	inferred   map[Expr][]Type      // ctor exprs whose type args were inferred (§8-lite)
 	patVariant map[Pattern]bool     // IdentPat that matches a unit variant (not a binding)
+	cycleDone  map[*StructDecl]bool // structs already reported on an infinite-size cycle
 }
 
 func preludeEnums() []*EnumDecl {
@@ -251,6 +293,7 @@ func check(f *File) (*checker, *Diagnostics) {
 	c := &checker{
 		diag:       &Diagnostics{},
 		enums:      map[string]*EnumDecl{},
+		structs:    map[string]*StructDecl{},
 		prelude:    map[*EnumDecl]bool{},
 		funcs:      map[string]*tFunc{},
 		ctors:      map[string]*ctorTarget{},
@@ -258,6 +301,7 @@ func check(f *File) (*checker, *Diagnostics) {
 		globals:    &scope{vars: map[string]Type{}},
 		types:      map[Expr]Type{},
 		resolved:   map[Expr]*ctorTarget{},
+		inferred:   map[Expr][]Type{},
 		patVariant: map[Pattern]bool{},
 	}
 	for _, e := range preludeEnums() {
@@ -268,14 +312,30 @@ func check(f *File) (*checker, *Diagnostics) {
 	c.globals.vars["ms"] = tduration
 	c.globals.vars["second"] = tduration
 	c.globals.vars["minute"] = tduration
-	// pass 1: register user enums (duplicate -> error, keep first, continue)
+	// pass 1: register user enums and structs — one Type namespace
+	// (duplicate -> error, keep first, continue)
 	for _, d := range f.Decls {
-		if e, ok := d.(*EnumDecl); ok {
-			if _, dup := c.enums[e.Name]; dup {
-				c.diag.errorf(e.Line, "duplicate type %s", e.Name)
+		switch dt := d.(type) {
+		case *EnumDecl:
+			if _, dup := c.enums[dt.Name]; dup {
+				c.diag.errorf(dt.Line, "duplicate type %s", dt.Name)
 				continue
 			}
-			c.enums[e.Name] = e
+			if _, dup := c.structs[dt.Name]; dup {
+				c.diag.errorf(dt.Line, "duplicate type %s", dt.Name)
+				continue
+			}
+			c.enums[dt.Name] = dt
+		case *StructDecl:
+			if _, dup := c.structs[dt.Name]; dup {
+				c.diag.errorf(dt.Line, "duplicate type %s", dt.Name)
+				continue
+			}
+			if _, dup := c.enums[dt.Name]; dup {
+				c.diag.errorf(dt.Line, "duplicate type %s", dt.Name)
+				continue
+			}
+			c.structs[dt.Name] = dt
 		}
 	}
 	// variant constructor index
@@ -298,6 +358,28 @@ func check(f *File) (*checker, *Diagnostics) {
 			for _, fld := range v.Fields {
 				c.resolveTypeIn(fld.Type, e)
 			}
+		}
+	}
+	// struct field types must resolve
+	for _, s := range c.structs {
+		for _, fld := range s.Fields {
+			c.resolveType(fld.Type)
+		}
+	}
+	// §4: infinite-size type cycle detection — a struct that contains
+	// itself without indirection (Ptr, slice, map, chan) cannot exist.
+	// One diagnostic per cycle: every struct on a detected cycle's path
+	// is marked so it isn't re-reported as another root.
+	c.cycleDone = map[*StructDecl]bool{}
+	names := make([]string, 0, len(c.structs))
+	for n := range c.structs {
+		names = append(names, n)
+	}
+	sort.Strings(names) // deterministic diagnostics, not map order
+	for _, n := range names {
+		s := c.structs[n]
+		if !c.cycleDone[s] {
+			c.checkStructCycles(s, s, map[*StructDecl]bool{})
 		}
 	}
 	// pass 1.5: function signatures (no bodies — mutual recursion works)
@@ -339,6 +421,34 @@ func check(f *File) (*checker, *Diagnostics) {
 	return c, c.diag
 }
 
+// checkStructCycles: DFS over direct (unboxed) struct fields; a cycle
+// means infinite size. Indirection through *T/map/slice/chan breaks it.
+func (c *checker) checkStructCycles(root, cur *StructDecl, visiting map[*StructDecl]bool) {
+	if visiting[cur] {
+		c.diag.errorf(cur.Line, "recursive type has infinite size: %s contains itself (insert indirection, e.g. *%s)", root.Name, cur.Name)
+		for s := range visiting {
+			c.cycleDone[s] = true
+		}
+		return
+	}
+	visiting[cur] = true
+	defer delete(visiting, cur)
+	for _, f := range cur.Fields {
+		if st, ok := c.resolveType(f.Type).(*tStruct); ok {
+			c.checkStructCycles(root, st.decl, visiting)
+		}
+	}
+}
+
+func structField(s *StructDecl, name string) *Field {
+	for i := range s.Fields {
+		if s.Fields[i].Name == name {
+			return &s.Fields[i]
+		}
+	}
+	return nil
+}
+
 func (c *checker) resolveType(te TypeExpr) Type { return c.resolveTypeIn(te, nil) }
 
 func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
@@ -360,6 +470,9 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 				return terr
 			}
 			return &tEnum{decl: e}
+		}
+		if s, ok := c.structs[t.Name]; ok {
+			return &tStruct{decl: s}
 		}
 		c.diag.errorf(t.Line, "undefined type %s", t.Name)
 		return terr
@@ -444,7 +557,12 @@ func (c *checker) checkStmt(s Stmt) {
 	case *VarStmt:
 		ty := c.resolveType(st.Type)
 		if st.Init != nil {
-			c.checkAgainst(st.Init, ty, st.Line)
+			if te, ok := st.Init.(*TryExpr); ok {
+				rt := c.checkTry(te)
+				c.expect(rt, ty, st.Line)
+			} else {
+				c.checkAgainst(st.Init, ty, st.Line)
+			}
 		}
 		c.cur.vars[st.Name] = ty
 	case *AssignStmt:
@@ -453,8 +571,38 @@ func (c *checker) checkStmt(s Stmt) {
 			return
 		}
 		for i := range st.Lhs {
+			if te, ok := st.Rhs[i].(*TryExpr); ok {
+				// `x := f()?` — only as the direct rhs of a single
+				// assignment; the desugar needs statement position
+				if len(st.Lhs) != 1 || (st.Op != ":=" && st.Op != "=") {
+					c.diag.errorf(te.Line, "? can only be used in a simple := or = assignment")
+					c.checkExpr(te.X)
+					continue
+				}
+				rt := c.checkTry(te)
+				if st.Op == ":=" {
+					id, ok := st.Lhs[i].(*Ident)
+					if !ok {
+						c.diag.errorf(st.Line, "left side of := must be a name")
+						continue
+					}
+					if id.Name != "_" {
+						if _, dup := c.cur.vars[id.Name]; dup {
+							c.diag.errorf(st.Line, "%s redeclared in this scope", id.Name)
+						}
+						c.cur.vars[id.Name] = rt
+					}
+				} else {
+					if id, ok := st.Lhs[i].(*Ident); ok && id.Name == "_" {
+						continue
+					}
+					lt := c.checkExpr(st.Lhs[i])
+					c.expect(rt, lt, st.Line)
+				}
+				continue
+			}
 			if st.Op == ":=" {
-				rt := c.checkExpr(st.Rhs[i])
+				rt := defaultType(c.checkExpr(st.Rhs[i]))
 				if mx, ok := st.Rhs[i].(*MatchExpr); ok && sameType(rt, tvoid) {
 					c.diag.errorf(mx.Line, "match in value context must produce a value in every arm")
 				}
@@ -487,7 +635,11 @@ func (c *checker) checkStmt(s Stmt) {
 			}
 		}
 	case *ExprStmt:
-		c.checkExpr(st.X)
+		if te, ok := st.X.(*TryExpr); ok {
+			c.checkTry(te) // value discarded; Err still propagates
+		} else {
+			c.checkExpr(st.X)
+		}
 	case *IfStmt:
 		ct := c.checkExpr(st.Cond)
 		c.expectBool(ct, st.Line, "if condition")
@@ -548,6 +700,10 @@ func (c *checker) checkStmt(s Stmt) {
 }
 
 func isNumeric(t Type) bool {
+	switch t.(type) {
+	case tUntypedInt, tUntypedFloat:
+		return true // literals are numeric before they are pinned (§7)
+	}
 	if b, ok := t.(tBasic); ok {
 		switch b.name {
 		case "int", "int8", "int16", "int32", "int64",
@@ -566,15 +722,63 @@ func isFloat(t Type) bool {
 	return false
 }
 
+// intConstFits reports whether an integer literal (Go syntax: 0x/0o/0b
+// prefixes and _ separators), negated when neg, fits the named numeric
+// type. Literals beyond uint64 magnitude fail ParseUint and are left for
+// the Go backend to reject — still exactly one diagnostic.
+func intConstFits(text string, neg bool, t Type) bool {
+	mag, err := strconv.ParseUint(text, 0, 64)
+	if err != nil {
+		return true
+	}
+	b, ok := t.(tBasic)
+	if !ok {
+		return true
+	}
+	var posLim, negLim uint64 // largest magnitude allowed plain / negated
+	switch b.name {
+	case "int8":
+		posLim, negLim = 1<<7-1, 1<<7
+	case "int16":
+		posLim, negLim = 1<<15-1, 1<<15
+	case "int32", "rune":
+		posLim, negLim = 1<<31-1, 1<<31
+	case "int64", "int", "duration":
+		posLim, negLim = 1<<63-1, 1<<63
+	case "uint8", "byte":
+		posLim = 1<<8 - 1
+	case "uint16":
+		posLim = 1<<16 - 1
+	case "uint32":
+		posLim = 1<<32 - 1
+	case "uint64", "uint", "uintptr":
+		posLim = 1<<64 - 1
+	default:
+		return true // floats: any integer literal is close enough
+	}
+	if neg {
+		return mag <= negLim // 0 for unsigned: -0 fits, -1 does not
+	}
+	return mag <= posLim
+}
+
 // expect verifies `from` is assignable to `to`; silent when either side is
 // poisoned (§4) or `from` diverges (tNever unifies with everything).
 func (c *checker) expect(from, to Type, line int) {
-	if sameType(from, to) || isNever(from) || sameType(to, tany) {
+	if sameType(from, to) || isNever(from) {
 		return
 	}
-	// untyped int constant flowing into a numeric type
-	if sameType(from, tint) && isNumeric(to) {
-		return
+	// untyped constants adopt any numeric type they flow into (§7);
+	// anything else is strict — no implicit conversions between typed values
+	switch from.(type) {
+	case tUntypedInt:
+		if isNumeric(to) {
+			return
+		}
+	case tUntypedFloat:
+		if isFloat(to) {
+			return
+		}
 	}
 	c.diag.errorf(line, "expected %s, found %s", to, from)
 }
@@ -595,28 +799,126 @@ func (c *checker) expectBool(t Type, line int, what string) {
 // numeric type (literal defaulting, §7); match expressions check every
 // arm against it. Signatures and declarations are the blame boundaries.
 func (c *checker) checkAgainst(e Expr, expected Type, line int) Type {
-	if lit, ok := e.(*BasicLit); ok {
-		switch lit.Kind {
-		case kInt:
-			if isNumeric(expected) {
-				c.types[e] = expected
-				return expected
-			}
-		case kFloat:
-			if isFloat(expected) {
+	if t, ok := c.tryAdopt(e, expected, line); ok {
+		return t
+	}
+	switch ex := e.(type) {
+	case *MatchExpr:
+		t := c.checkMatchWant(ex, expected)
+		c.types[e] = t // checkExpr records this; the CHECK path must too
+		return t
+	case *Ident:
+		// a bare generic unit variant (None) solves from the expected
+		// type: var o Option[int] = None. In infer mode it stays an error.
+		if ct, ok := c.ctors[ex.Name]; ok && len(ct.enum.TypeParams) > 0 && len(ct.variant.Fields) == 0 {
+			if en, ok2 := expected.(*tEnum); ok2 && en.decl == ct.enum && len(en.args) == len(ct.enum.TypeParams) {
+				if c.ambiguous[ex.Name] {
+					c.diag.errorf(line, "variant name %s is ambiguous (multiple enums)", ex.Name)
+					c.types[e] = terr
+					return terr
+				}
+				c.resolved[ex] = ct
+				c.inferred[ex] = en.args
 				c.types[e] = expected
 				return expected
 			}
 		}
-	}
-	if mx, ok := e.(*MatchExpr); ok {
-		t := c.checkMatchWant(mx, expected)
-		c.types[e] = t // checkExpr records this; the CHECK path must too
+	case *CallExpr:
+		// the expected type flows into the call so generic constructors
+		// can infer their type arguments: var r Result[int, string] = Ok(1)
+		t := c.checkCall(ex, expected)
+		c.types[e] = t
+		c.expect(t, expected, line)
 		return t
 	}
 	t := c.checkExpr(e)
 	c.expect(t, expected, line)
 	return t
+}
+
+// tryAdopt handles expression shapes that need the expected type itself:
+// integer/float literals (and signed literals) adopt it, with a
+// compile-time overflow check (§7). ok=false means e is not one of those
+// shapes — the caller falls back to infer + expect.
+func (c *checker) tryAdopt(e Expr, expected Type, line int) (Type, bool) {
+	if lit, ok := e.(*BasicLit); ok {
+		switch lit.Kind {
+		case kInt:
+			if isNumeric(expected) {
+				if !intConstFits(lit.Value, false, expected) {
+					c.diag.errorf(line, "constant %s overflows %s", lit.Value, expected)
+					c.types[e] = terr
+					return terr, true
+				}
+				c.types[e] = expected
+				return expected, true
+			}
+		case kFloat:
+			if isFloat(expected) {
+				c.types[e] = expected
+				return expected, true
+			}
+		}
+		return nil, false
+	}
+	if un, ok := e.(*UnaryExpr); ok && (un.Op == "-" || un.Op == "+") {
+		if lit, ok := un.X.(*BasicLit); ok {
+			neg := un.Op == "-"
+			switch lit.Kind {
+			case kInt:
+				if isNumeric(expected) {
+					if !intConstFits(lit.Value, neg, expected) {
+						sign := "+"
+						if neg {
+							sign = "-"
+						}
+						c.diag.errorf(line, "constant %s%s overflows %s", sign, lit.Value, expected)
+						c.types[e] = terr
+						return terr, true
+					}
+					c.types[e] = expected
+					return expected, true
+				}
+			case kFloat:
+				if isFloat(expected) {
+					c.types[e] = expected
+					return expected, true
+				}
+			}
+		}
+	}
+	return nil, false
+}
+
+// checkTry checks `expr?` in statement position (spec §7): the operand
+// must be Result[T, E], the enclosing function must return Result[_, E]
+// with a matching E, and the expression has type T. On Err the emitted
+// code returns Err(e) from the function early.
+func (c *checker) checkTry(te *TryExpr) Type {
+	xt := c.checkExpr(te.X)
+	var ty Type = terr
+	if isErr(xt) {
+		ty = terr
+	} else if en, ok := xt.(*tEnum); !ok || en.decl.Name != "Result" || len(en.args) != 2 {
+		c.diag.errorf(te.Line, "? needs a Result[T, E], got %s", xt)
+	} else {
+		e := en.args[1]
+		bad := false
+		if len(c.curResults) != 1 {
+			bad = true
+		} else if rt, ok := c.curResults[0].(*tEnum); !ok || rt.decl.Name != "Result" || len(rt.args) != 2 {
+			bad = true
+		} else {
+			c.expect(e, rt.args[1], te.Line) // error types must match
+		}
+		if bad {
+			c.diag.errorf(te.Line, "? requires the function to return Result[T, %s]", e)
+		} else {
+			ty = en.args[0]
+		}
+	}
+	c.types[te] = ty
+	return ty
 }
 
 func (c *checker) checkExprIn(e Expr, s *scope) Type {
@@ -633,9 +935,9 @@ func (c *checker) checkExpr(e Expr) Type {
 	case *BasicLit:
 		switch ex.Kind {
 		case kInt:
-			ty = tint // unconstrained int literal defaults to int (§7)
+			ty = tUntypedInt{} // context pins it; unconstrained defaults to int (§7)
 		case kFloat:
-			ty = tfloat64
+			ty = tUntypedFloat{}
 		case kString:
 			ty = tstring
 		case kRune:
@@ -660,24 +962,26 @@ func (c *checker) checkExpr(e Expr) Type {
 			c.expect(yt, xt, ex.Line)
 			ty = tbool
 		case "<", "<=", ">", ">=":
-			if (isNumeric(xt) && isNumeric(yt)) || (sameType(xt, tstring) && sameType(yt, tstring)) {
+			if sameType(xt, tstring) && sameType(yt, tstring) {
+				ty = tbool
+			} else if arithType(xt, yt) != nil {
 				ty = tbool
 			} else {
-				c.diag.errorf(ex.Line, "invalid comparison: %s %s %s", xt, ex.Op, yt)
+				c.diag.errorf(ex.Line, "invalid comparison: %s %s %s (mismatched types)", xt, ex.Op, yt)
 				ty = terr
 			}
 		case "+":
 			if sameType(xt, tstring) && sameType(yt, tstring) {
 				ty = tstring
-			} else if isNumeric(xt) && isNumeric(yt) {
-				ty = arithType(xt, yt)
+			} else if at := arithType(xt, yt); at != nil {
+				ty = at
 			} else {
 				c.diag.errorf(ex.Line, "invalid operation: %s + %s (mismatched types)", xt, yt)
 				ty = terr
 			}
 		default: // -, *, /, %, bit ops, shifts
-			if isNumeric(xt) && isNumeric(yt) {
-				ty = arithType(xt, yt)
+			if at := arithType(xt, yt); at != nil {
+				ty = at
 			} else {
 				c.diag.errorf(ex.Line, "invalid operation: %s %s %s (mismatched types)", xt, ex.Op, yt)
 				ty = terr
@@ -690,21 +994,23 @@ func (c *checker) checkExpr(e Expr) Type {
 			ty = terr
 		default:
 			switch ex.Op {
-			case "<-":
-				if ch, ok := xt.(*tChan); ok {
-					ty = ch.elem
-				} else {
-					c.diag.errorf(ex.Line, "cannot receive from non-channel %s", xt)
-					ty = terr
-				}
 			case "!":
 				ty = tbool
+			case "&":
+				ty = &tStar{x: xt}
+			case "*":
+				if st, ok := xt.(*tStar); ok {
+					ty = st.x
+				} else {
+					c.diag.errorf(ex.Line, "cannot dereference non-pointer %s", xt)
+					ty = terr
+				}
 			default:
 				ty = xt
 			}
 		}
 	case *CallExpr:
-		ty = c.checkCall(ex)
+		ty = c.checkCall(ex, nil)
 	case *SelectorExpr:
 		ty = c.checkSelector(ex)
 	case *IndexExpr:
@@ -723,7 +1029,15 @@ func (c *checker) checkExpr(e Expr) Type {
 			ty = &tChan{elem: et}
 		}
 	case *MatchExpr:
-		ty = c.checkMatchWant(ex, nil)
+		// infer mode: an all-literal match materializes at its default
+		// type — the emitter needs a concrete Go type for the iife
+		ty = defaultType(c.checkMatchWant(ex, nil))
+	case *StructLitExpr:
+		ty = c.checkStructLit(ex)
+	case *TryExpr:
+		c.diag.errorf(ex.Line, "? can only be used directly on the right side of := / = / var, or as a statement")
+		c.checkExpr(ex.X)
+		ty = terr
 	default:
 		c.diag.errorf(0, "unhandled expression %T", e)
 		ty = terr
@@ -732,14 +1046,36 @@ func (c *checker) checkExpr(e Expr) Type {
 	return ty
 }
 
+// arithType merges numeric operand types (§7): untyped constants yield to
+// the typed operand; identical types pass through; duration absorbs any
+// numeric (it is an int64 count, and d*3 must stay convenient). Anything
+// else returns nil and the caller reports "mismatched types" — mixing two
+// different typed numerics (int8 + int64) is an error, not a conversion.
 func arithType(x, y Type) Type {
-	if sameType(x, tduration) || sameType(y, tduration) {
+	if (sameType(x, tduration) && isNumeric(y)) || (sameType(y, tduration) && isNumeric(x)) {
 		return tduration
 	}
-	if sameType(x, tfloat64) || sameType(y, tfloat64) {
-		return tfloat64
+	_, xUI := x.(tUntypedInt)
+	_, yUI := y.(tUntypedInt)
+	_, xUF := x.(tUntypedFloat)
+	_, yUF := y.(tUntypedFloat)
+	switch {
+	case xUI && yUI:
+		return tUntypedInt{}
+	case (xUI || xUF) && (yUI || yUF): // both untyped, one a float
+		return tUntypedFloat{}
+	case xUI && isNumeric(y):
+		return y
+	case yUI && isNumeric(x):
+		return x
+	case xUF && isFloat(y):
+		return y
+	case yUF && isFloat(x):
+		return x
+	case sameType(x, y) && isNumeric(x):
+		return x
 	}
-	return x
+	return nil
 }
 
 func (c *checker) checkIdentValue(ex *Ident) Type {
@@ -778,7 +1114,9 @@ func (c *checker) checkIdentValue(ex *Ident) Type {
 	return terr
 }
 
-func (c *checker) checkCall(ex *CallExpr) Type {
+// checkCall checks a call. want is the expected type in CHECK mode (nil in
+// infer mode) — generic constructors use it to seed type-arg inference.
+func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 	switch fun := ex.Fun.(type) {
 	case *Ident:
 		switch fun.Name {
@@ -806,6 +1144,11 @@ func (c *checker) checkCall(ex *CallExpr) Type {
 			}
 			return c.checkExpr(ex.Args[0])
 		}
+		if basicTypes[fun.Name] {
+			// a type name in call position is an explicit conversion (§7) —
+			// the only sanctioned way to mix numeric widths
+			return c.checkConversion(ex, fun.Name)
+		}
 		if ft, ok := c.funcs[fun.Name]; ok {
 			c.checkCallArgs(ex, ft.params)
 			if len(ft.results) > 0 {
@@ -814,7 +1157,7 @@ func (c *checker) checkCall(ex *CallExpr) Type {
 			return tvoid
 		}
 		if ct, ok := c.ctors[fun.Name]; ok {
-			return c.callVariantCtor(ex, fun, ct, nil)
+			return c.callVariantCtor(ex, fun, ct, nil, want)
 		}
 		c.diag.errorf(ex.Line, "undefined function: %s", fun.Name)
 		for _, a := range ex.Args {
@@ -839,7 +1182,7 @@ func (c *checker) checkCall(ex *CallExpr) Type {
 				if bad {
 					return terr
 				}
-				return c.callVariantCtor(ex, id, ct, args)
+				return c.callVariantCtor(ex, id, ct, args, want)
 			}
 		}
 		c.diag.errorf(ex.Line, "not a generic constructor call")
@@ -893,17 +1236,26 @@ func (c *checker) checkCall(ex *CallExpr) Type {
 	return terr
 }
 
-func (c *checker) callVariantCtor(ex *CallExpr, id *Ident, ct *ctorTarget, args []Type) Type {
+func (c *checker) callVariantCtor(ex *CallExpr, id *Ident, ct *ctorTarget, args []Type, want Type) Type {
 	if c.ambiguous[id.Name] {
 		c.diag.errorf(ex.Line, "variant name %s is ambiguous (multiple enums)", id.Name)
 		return terr
 	}
+	if len(ex.Args) != len(ct.variant.Fields) {
+		c.diag.errorf(ex.Line, "%s takes %d value(s), got %d", id.Name, len(ct.variant.Fields), len(ex.Args))
+		return terr
+	}
+	inferred := false
 	if len(ct.enum.TypeParams) > 0 {
 		if args == nil {
-			c.diag.errorf(ex.Line, "%s is generic; use explicit type arguments like %s[..](...)", id.Name, id.Name)
-			return terr
-		}
-		if len(args) != len(ct.enum.TypeParams) { // arity (§5)
+			// §8-lite: solve type arguments from the expected type and
+			// the value arguments — pattern matching, not unification
+			args = c.inferTypeArgs(ex, id, ct, want)
+			if args == nil {
+				return terr
+			}
+			inferred = true
+		} else if len(args) != len(ct.enum.TypeParams) { // arity (§5)
 			c.diag.errorf(ex.Line, "%s takes %d type argument(s), got %d", id.Name, len(ct.enum.TypeParams), len(args))
 			return terr
 		}
@@ -912,19 +1264,120 @@ func (c *checker) callVariantCtor(ex *CallExpr, id *Ident, ct *ctorTarget, args 
 		return terr
 	}
 	et := &tEnum{decl: ct.enum, args: args}
-	if len(ex.Args) != len(ct.variant.Fields) {
-		c.diag.errorf(ex.Line, "%s takes %d value(s), got %d", id.Name, len(ct.variant.Fields), len(ex.Args))
-		return terr
-	}
 	for i, f := range ct.variant.Fields {
 		ft := c.resolveTypeIn(f.Type, ct.enum)
 		if args != nil {
 			ft = subst(ft, ct.enum.TypeParams, args)
 		}
-		c.checkAgainst(ex.Args[i], ft, ex.Line)
+		if inferred {
+			// the args were infer-checked to solve the parameters; now
+			// verify them against the solved field types (literals still
+			// get adoption + the overflow check)
+			if _, ok := c.tryAdopt(ex.Args[i], ft, ex.Line); !ok {
+				c.expect(c.types[ex.Args[i]], ft, ex.Line)
+			}
+		} else {
+			c.checkAgainst(ex.Args[i], ft, ex.Line)
+		}
 	}
 	c.resolved[id] = ct
+	if inferred {
+		c.inferred[id] = args
+	}
 	return et
+}
+
+// inferTypeArgs solves a generic constructor's type arguments without a
+// unification engine: the expected type seeds the solution, then each
+// value argument's inferred type is pattern-matched against the variant's
+// field types. Anything left unsolved is one clear error, not a cascade.
+func (c *checker) inferTypeArgs(ex *CallExpr, id *Ident, ct *ctorTarget, want Type) []Type {
+	n := len(ct.enum.TypeParams)
+	solved := make([]Type, n)
+	// context pins what it can: var r Result[int, string] = Ok(...)
+	if en, ok := want.(*tEnum); ok && en.decl == ct.enum && len(en.args) == n {
+		copy(solved, en.args)
+	}
+	for i, f := range ct.variant.Fields {
+		at := c.checkExpr(ex.Args[i]) // value arity already verified
+		if isErr(at) {
+			continue
+		}
+		ft := c.resolveTypeIn(f.Type, ct.enum)
+		c.matchTypePattern(ft, at, ct.enum.TypeParams, solved, ex.Line)
+	}
+	for i := range solved {
+		if solved[i] == nil {
+			c.diag.errorf(ex.Line, "cannot infer type argument %s for %s; use explicit %s[%s](...)",
+				ct.enum.TypeParams[i], id.Name, id.Name, strings.Join(ct.enum.TypeParams, ", "))
+			return nil
+		}
+		solved[i] = defaultType(solved[i])
+	}
+	return solved
+}
+
+// matchTypePattern matches a field type pattern (which may mention the
+// enum's type parameters, possibly nested inside enums/maps/slices/chans/
+// pointers) against a concrete argument type, recording solutions. A
+// conflict diagnoses once and poisons the parameter so downstream checks
+// stay silent (§11); an untyped literal constraint yields to a typed one.
+func (c *checker) matchTypePattern(pat, arg Type, params []string, solved []Type, line int) {
+	switch p := pat.(type) {
+	case tTypeParam:
+		for i, name := range params {
+			if name != p.name {
+				continue
+			}
+			switch {
+			case solved[i] == nil:
+				solved[i] = arg
+			case sameType(solved[i], arg):
+				// agreement (or either side poisoned): nothing to do
+			default:
+				if _, ok := arg.(tUntypedInt); ok && isNumeric(solved[i]) {
+					return
+				}
+				if _, ok := arg.(tUntypedFloat); ok && isFloat(solved[i]) {
+					return
+				}
+				if _, ok := solved[i].(tUntypedInt); ok && isNumeric(arg) {
+					solved[i] = arg
+					return
+				}
+				if _, ok := solved[i].(tUntypedFloat); ok && isFloat(arg) {
+					solved[i] = arg
+					return
+				}
+				c.diag.errorf(line, "type argument %s inferred as both %s and %s", p.name, solved[i], arg)
+				solved[i] = terr // poison: one conflict, one diagnostic
+			}
+			return
+		}
+	case *tEnum:
+		if a, ok := arg.(*tEnum); ok && a.decl == p.decl && len(a.args) == len(p.args) {
+			for i := range p.args {
+				c.matchTypePattern(p.args[i], a.args[i], params, solved, line)
+			}
+		}
+	case *tMap:
+		if a, ok := arg.(*tMap); ok {
+			c.matchTypePattern(p.k, a.k, params, solved, line)
+			c.matchTypePattern(p.v, a.v, params, solved, line)
+		}
+	case *tSlice:
+		if a, ok := arg.(*tSlice); ok {
+			c.matchTypePattern(p.elem, a.elem, params, solved, line)
+		}
+	case *tChan:
+		if a, ok := arg.(*tChan); ok {
+			c.matchTypePattern(p.elem, a.elem, params, solved, line)
+		}
+	case *tStar:
+		if a, ok := arg.(*tStar); ok {
+			c.matchTypePattern(p.x, a.x, params, solved, line)
+		}
+	}
 }
 
 func (c *checker) checkCallArgs(ex *CallExpr, params []Type) {
@@ -937,10 +1390,108 @@ func (c *checker) checkCallArgs(ex *CallExpr, params []Type) {
 	}
 }
 
+// checkConversion checks T(x) where T is a basic type name (§7). Explicit
+// is the whole point: numeric widths mix only through one of these calls.
+// string(int) is rejected like Go vet — runes are the currency of text.
+func (c *checker) checkConversion(ex *CallExpr, name string) Type {
+	to := tBasic{name}
+	if len(ex.Args) != 1 {
+		c.diag.errorf(ex.Line, "conversion to %s takes 1 argument, got %d", name, len(ex.Args))
+		for _, a := range ex.Args {
+			c.checkExpr(a)
+		}
+		return terr
+	}
+	from := defaultType(c.checkExpr(ex.Args[0]))
+	if isErr(from) {
+		return terr
+	}
+	switch {
+	case sameType(from, to):
+		// identity conversion: redundant but harmless
+	case isNumeric(from) && isNumeric(to):
+		// numeric <-> numeric, the reason conversions exist
+	case (sameType(from, trune) && sameType(to, tstring)) ||
+		(sameType(from, tstring) && sameType(to, trune)):
+		// rune <-> string
+	case sameType(to, tstring):
+		c.diag.errorf(ex.Line, "cannot convert %s to string (did you mean string(rune(...))?)", from)
+		return terr
+	default:
+		c.diag.errorf(ex.Line, "cannot convert %s to %s", from, to)
+		return terr
+	}
+	return to
+}
+
+// checkStructLit checks a composite literal against its struct decl:
+// keyed fields must exist and match; positional fields go in declaration
+// order and must be exactly complete; mixing the two is an error (Go's
+// rules). Missing keyed fields take the zero value (SPEC.md).
+func (c *checker) checkStructLit(ex *StructLitExpr) Type {
+	rt := c.resolveType(ex.Type)
+	st, ok := rt.(*tStruct)
+	if !ok {
+		if !isErr(rt) {
+			c.diag.errorf(ex.Line, "composite literal of non-struct type %s", rt)
+		}
+		return terr
+	}
+	d := st.decl
+	seen := map[string]bool{}
+	positional := 0
+	mixed := false // suppress the positional-count error after a mix (one mistake, one diagnostic)
+	for _, fv := range ex.Fields {
+		if fv.Name == "" {
+			if len(seen) > 0 {
+				c.diag.errorf(fv.Line, "cannot mix positional and keyed fields")
+				mixed = true
+				c.checkExpr(fv.Value)
+				continue
+			}
+			if positional >= len(d.Fields) {
+				c.diag.errorf(fv.Line, "too many values in %s literal (%d fields)", d.Name, len(d.Fields))
+				c.checkExpr(fv.Value)
+				continue
+			}
+			c.checkAgainst(fv.Value, c.resolveType(d.Fields[positional].Type), fv.Line)
+			positional++
+			continue
+		}
+		if positional > 0 {
+			c.diag.errorf(fv.Line, "cannot mix positional and keyed fields")
+			mixed = true
+		}
+		f := structField(d, fv.Name)
+		if f == nil {
+			c.diag.errorf(fv.Line, "%s has no field %s", d.Name, fv.Name)
+			c.checkExpr(fv.Value)
+			continue
+		}
+		if seen[fv.Name] {
+			c.diag.errorf(fv.Line, "duplicate field %s in literal", fv.Name)
+		}
+		seen[fv.Name] = true
+		c.checkAgainst(fv.Value, c.resolveType(f.Type), fv.Line)
+	}
+	if !mixed && positional > 0 && positional != len(d.Fields) {
+		c.diag.errorf(ex.Line, "too few values in %s literal: %d of %d fields", d.Name, positional, len(d.Fields))
+	}
+	return st
+}
+
 func (c *checker) checkSelector(ex *SelectorExpr) Type {
 	xt := c.checkExpr(ex.X)
 	if isErr(xt) {
 		return terr
+	}
+	if st, ok := xt.(*tStruct); ok {
+		f := structField(st.decl, ex.Sel)
+		if f == nil {
+			c.diag.errorf(ex.Line, "%s has no field %s", xt, ex.Sel)
+			return terr
+		}
+		return c.resolveType(f.Type)
 	}
 	if en, ok := xt.(*tEnum); ok && en.decl.Name == "Result" {
 		if ex.Sel == "IsOk" || ex.Sel == "IsErr" {
@@ -1074,6 +1625,19 @@ func (c *checker) unifyArms(cur, next Type, line int) Type {
 	}
 	if isNever(cur) {
 		return next
+	}
+	// an untyped literal arm yields to a typed numeric arm (§7)
+	if _, ok := cur.(tUntypedInt); ok && isNumeric(next) {
+		return next
+	}
+	if _, ok := next.(tUntypedInt); ok && isNumeric(cur) {
+		return cur
+	}
+	if _, ok := cur.(tUntypedFloat); ok && isFloat(next) {
+		return next
+	}
+	if _, ok := next.(tUntypedFloat); ok && isFloat(cur) {
+		return cur
 	}
 	if !sameType(cur, next) {
 		c.diag.errorf(line, "match arms produce different types (%s vs %s)", cur, next)

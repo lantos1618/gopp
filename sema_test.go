@@ -34,9 +34,9 @@ func main() {
     }
 }
 `)
-	f, err := parse(toks)
-	if err != nil {
-		t.Fatal(err)
+	f, pdiags := parse(toks)
+	if pdiags.HasErrors() {
+		t.Fatal(pdiags)
 	}
 	if _, diags := check(f); diags.HasErrors() {
 		t.Fatalf("unexpected error:\n%s", diags)
@@ -59,9 +59,9 @@ func main() {
 }
 `
 	toks, _ := lex(src)
-	f, err := parse(toks)
-	if err != nil {
-		t.Fatal(err)
+	f, pdiags := parse(toks)
+	if pdiags.HasErrors() {
+		t.Fatal(pdiags)
 	}
 	if _, diags := check(f); diags.HasErrors() {
 		t.Fatalf("unexpected error:\n%s", diags)

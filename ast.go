@@ -42,8 +42,18 @@ type Variant struct {
 	Line   int
 }
 
-func (*FuncDecl) declNode() {}
-func (*EnumDecl) declNode() {}
+// StructDecl is `type Name struct { ... }`. Derives lists @derive names
+// attached above the declaration (e.g. ["Debug", "Clone"]).
+type StructDecl struct {
+	Name    string
+	Fields  []Field
+	Derives []string
+	Line    int
+}
+
+func (*FuncDecl) declNode()   {}
+func (*EnumDecl) declNode()   {}
+func (*StructDecl) declNode() {}
 
 // ---------- types ----------
 
@@ -221,6 +231,29 @@ type MakeChanExpr struct {
 	Line int
 }
 
+// StructLitExpr is a composite literal: User{ID: 1, Name: "x"} or
+// positional User{1, "x"}. A FieldVal with Name == "" is positional.
+type StructLitExpr struct {
+	Type   TypeExpr
+	Fields []FieldVal
+	Line   int
+}
+
+type FieldVal struct {
+	Name  string
+	Value Expr
+	Line  int
+}
+
+// TryExpr is `expr?` — the try operator (spec §7). It is only valid as
+// the direct right-hand side of an assignment, var initializer, or as an
+// expression statement: the operand must be Result[T, E] and the
+// enclosing function must return Result[_, E]; on Err it returns early.
+type TryExpr struct {
+	X    Expr
+	Line int
+}
+
 // MatchExpr is both a statement (wrapped in ExprStmt) and an expression.
 // Subject == nil means the subject-less form (channel/boolean arms).
 type MatchExpr struct {
@@ -230,15 +263,17 @@ type MatchExpr struct {
 	Line    int
 }
 
-func (*Ident) exprNode()        {}
-func (*BasicLit) exprNode()     {}
-func (*BinaryExpr) exprNode()   {}
-func (*UnaryExpr) exprNode()    {}
-func (*CallExpr) exprNode()     {}
-func (*SelectorExpr) exprNode() {}
-func (*IndexExpr) exprNode()    {}
-func (*MakeChanExpr) exprNode() {}
-func (*MatchExpr) exprNode()    {}
+func (*Ident) exprNode()         {}
+func (*BasicLit) exprNode()      {}
+func (*BinaryExpr) exprNode()    {}
+func (*UnaryExpr) exprNode()     {}
+func (*CallExpr) exprNode()      {}
+func (*SelectorExpr) exprNode()  {}
+func (*IndexExpr) exprNode()     {}
+func (*MakeChanExpr) exprNode()  {}
+func (*MatchExpr) exprNode()     {}
+func (*StructLitExpr) exprNode() {}
+func (*TryExpr) exprNode()       {}
 
 // ---------- match patterns ----------
 

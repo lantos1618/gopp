@@ -1,0 +1,10 @@
+package main
+func main() {
+    println(Ok(1)) //~ ERROR cannot infer type argument E for Ok
+    var r Result[int, string] = Ok("x") //~ ERROR type argument T inferred as both int and string
+    _ = r
+    n := None //~ ERROR None is generic
+    _ = n
+    var o Option[int] = Some(1, 2) //~ ERROR Some takes 1 value(s), got 2
+    _ = o
+}

@@ -24,10 +24,13 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   `Err(e) -> panic(e)` is a valid value-producing match arm and
   `loop {}` without a break satisfies all-paths-return.
 - No implicit conversions (§7): `int + string`, `1 < "x"`, `true && 1` are
-  errors. There is no truthiness; conditions must be `bool`.
+  errors, and so is mixing typed numerics (`int8 + int64`). There is no
+  truthiness; conditions must be `bool`. Explicit conversions exist —
+  see §7 below.
 - Aliases: none in the language. Generics: enum declarations only
-  (`Result[T, E]`), instantiated explicitly at use sites
-  (`Ok[int, string](1)`). Arity is checked (§5).
+  (`Result[T, E]`). Use sites take explicit type arguments
+  (`Ok[int, string](1)`) or infer them (§8-lite below). Arity is
+  checked (§5).
 
 ## Inference & literals (§6, §7)
 
@@ -35,13 +38,47 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   return statements, call arguments, and match-in-value-context are
   CHECK mode — the expected type propagates downward. Signatures and
   declarations are the blame boundaries.
-- Literal defaulting: an integer literal checked against a numeric type
-  adopts that type (`var x int64 = 5`); unconstrained it defaults to `int`.
-  Float literals default to `float64`.
+- Numeric literals are **untyped constants**: inferring `5` yields
+  `untyped int`, `1.5` yields `untyped float`. CHECK mode adopts the
+  expected numeric type with a compile-time overflow check
+  (`var x int8 = 300` is an error, including signed literals like
+  `var b uint8 = -1`). Unconstrained use defaults: `int` / `float64`.
+- In arithmetic and comparison an untyped constant yields to the typed
+  operand (`a + 1` has `a`'s type); two untyped constants stay untyped
+  until defaulted. `duration` absorbs any numeric operand (it is an
+  int64 count; `d * 3` must stay convenient).
+- **No implicit conversions between typed values.** `int8 + int64` and
+  `int32 < int64` are "mismatched types" errors. The escape hatch is an
+  explicit conversion, `int64(x)` — a basic type name in call position.
+  Numeric↔numeric converts freely; `rune`↔`string` converts;
+  `string(int)` is rejected (did you mean `string(rune(...))`?);
+  everything else is a "cannot convert" error. Identity conversions are
+  allowed.
 - Inference is function-local and annotation-free: `:=` takes the RHS
-  type directly. There are no inference variables, hence no unification
-  engine and no occurs check — they arrive with generic functions (§8),
-  which are deliberately not built yet.
+  type directly (defaulting untyped literals). There are no inference
+  variables, hence no unification engine and no occurs check — they
+  arrive with generic functions (§8), which are deliberately not built
+  yet. Constructor type-argument inference (below) is pattern matching,
+  not unification.
+
+## Generic constructor inference (§8-lite)
+
+- `var r Result[int, string] = Ok(1)`, `return Ok(1)` from a
+  `Result[int, string]` function, and `var o Option[int] = None` all
+  work without explicit type arguments. The expected type seeds the
+  solution; value-argument types are then pattern-matched against the
+  variant's field types (parameters may nest inside
+  enums/maps/slices/chans/pointers).
+- What cannot be solved is an error, not a guess: `println(Ok(1))` →
+  "cannot infer type argument E for Ok; use explicit Ok[T, E](...)".
+  A bare generic unit variant in infer mode (`n := None`) stays an
+  error.
+- Conflicts diagnose once and poison the parameter: `Ok("x")` against
+  `Result[int, string]` → "type argument T inferred as both int and
+  string". One mistake, one diagnostic (§11).
+- Untyped literal constraints yield to typed ones and default at the
+  end (§7), so `Ok(1)` against `Result[int64, string]` solves T=int64
+  and the literal still gets its overflow check.
 
 ## Scopes & names (§3)
 
@@ -72,6 +109,29 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - Unreachable code after a diverging statement is a warning; the emitter
   drops it (Go demands functions *end* in a terminating statement).
 - Warnings never block compilation.
+
+## Removals from Go (§5)
+
+These are language-level deletions, not lint rules — the names don't parse
+or don't resolve, so the programs cannot be written:
+
+- **`error` is not a type.** Failures are values: `Result[T, E]` from the
+  prelude, propagated with `?`, handled with `match`. A function that can
+  fail says so in its return type.
+- **`any` is not a type.** It existed to punch holes in Go's type system;
+  go++ has no hole to punch. Emitted Go still uses `any` inside generic
+  instantiations — that's Go's encoding, not go++'s surface.
+- **`<-` is not syntax.** Bare channel receive/send operators are gone;
+  channels are used through `ch.recv()`, `ch.send(v)`, `ch.close()` (and
+  `select`, which keeps its own syntax). One obvious way, no operator
+  precedence puzzles.
+- **No nil maps.** `var m map[K]V` emits `make(...)` — declared maps are
+  always ready to write (the silent-crash footgun that motivated go++).
+- **No implicit conversions.** `int32` and `int64` do not mix silently;
+  conversions are explicit function-style calls (Phase B).
+
+`null`/`nil` absence is handled by `Option[T]`; pointers (`&`/`*`) exist
+but null pointer constants do not — there is no way to write one.
 
 ## Evaluation & runtime semantics
 

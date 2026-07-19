@@ -1,0 +1,14 @@
+// positive: pointers break the cycle (§4), zero values, deref
+package main
+type Linked struct {
+    Next *Linked
+    V int
+}
+func main() {
+    var l Linked
+    println(l.V)
+    a := Linked{V: 1}
+    b := Linked{Next: &a, V: 2}
+    println(b.V)
+    println((*b.Next).V)
+}

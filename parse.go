@@ -4,7 +4,12 @@ import "fmt"
 
 // parse.go — go++ v2 compiler: recursive-descent parser.
 // Consumes the token stream from lex.go and produces the AST from ast.go.
-// Errors are raised via panic(parseError) and recovered in parse().
+//
+// Error handling is panic-mode recovery (§0: partial results on broken
+// input): parseError panics unwind to the nearest recovery point —
+// declaration, statement, or match arm — where the diagnostic is recorded
+// and the parser synchronizes to the next boundary token. parse() returns
+// everything it found; a parseError never escapes.
 
 type parseError struct{ msg string }
 
@@ -13,21 +18,29 @@ func (e parseError) Error() string { return e.msg }
 type parser struct {
 	toks []token
 	pos  int
+	diag *Diagnostics
+	// noStructLit disables composite literals (Go's rule: they may not
+	// appear between a keyword and the opening brace of its block, or
+	// `if x {` would be misparsed). Set around condition parsing.
+	noStructLit bool
 }
 
-func parse(toks []token) (f *File, err error) {
+func parse(toks []token) (f *File, diags *Diagnostics) {
+	p := &parser{toks: toks, diag: &Diagnostics{}}
 	defer func() {
+		// last-resort net (e.g. a malformed `package` clause)
 		if r := recover(); r != nil {
 			if pe, ok := r.(parseError); ok {
-				err = pe
-				return
+				line, msg := splitLinePrefix(pe.msg)
+				p.diag.errorf(line, "%s", msg)
+			} else {
+				panic(r)
 			}
-			panic(r)
 		}
+		diags = p.diag
 	}()
-	p := &parser{toks: toks}
 	f = p.parseFile()
-	return f, nil
+	return f, p.diag
 }
 
 func (p *parser) cur() token  { return p.toks[p.pos] }
@@ -76,16 +89,81 @@ func (p *parser) parseFile() *File {
 		if p.cur().kind == kEOF {
 			return f
 		}
-		switch p.cur().text {
-		case "func", "fn":
-			f.Decls = append(f.Decls, p.parseFuncDecl())
-		case "enum":
-			f.Decls = append(f.Decls, p.parseEnumDecl())
-		case "import":
-			p.errorf(p.cur().line, "import is not supported in v2 yet")
-		default:
-			p.errorf(p.cur().line, "expected declaration, got %q", p.cur().text)
+		if d := p.tryDecl(); d != nil {
+			f.Decls = append(f.Decls, d)
 		}
+	}
+}
+
+// tryDecl parses one declaration; on a parse error it records the
+// diagnostic, synchronizes to the next plausible declaration, and returns
+// nil so the file keeps parsing.
+func (p *parser) tryDecl() (d Decl) {
+	defer func() {
+		if r := recover(); r != nil {
+			if pe, ok := r.(parseError); ok {
+				line, msg := splitLinePrefix(pe.msg)
+				p.diag.errorf(line, "%s", msg)
+				p.synchronizeDecl()
+				d = nil
+				return
+			}
+			panic(r)
+		}
+	}()
+	switch p.cur().text {
+	case "func", "fn":
+		return p.parseFuncDecl()
+	case "enum":
+		return p.parseEnumDecl()
+	case "type":
+		return p.parseStructDecl()
+	case "import":
+		p.errorf(p.cur().line, "import is not supported in v2 yet")
+	}
+	p.errorf(p.cur().line, "expected declaration, got %q", p.cur().text)
+	return nil
+}
+
+// synchronizeDecl skips tokens until something that can start a
+// declaration at depth 0, or EOF. It always advances at least one token.
+func (p *parser) synchronizeDecl() {
+	start := p.pos
+	depth := 0
+	for p.cur().kind != kEOF {
+		if p.pos > start && depth == 0 {
+			switch p.cur().text {
+			case "func", "fn", "enum":
+				return
+			}
+		}
+		switch p.cur().text {
+		case "(", "[", "{":
+			depth++
+		case ")", "]", "}":
+			if depth > 0 {
+				depth--
+			}
+		}
+		p.next()
+	}
+}
+
+// synchronizeStmt skips to the next statement boundary: a newline
+// (consumed), a closing brace (left for the block), or EOF.
+func (p *parser) synchronizeStmt() {
+	for {
+		tk := p.cur()
+		switch {
+		case tk.kind == kEOF:
+			return
+		case tk.kind == kNewline:
+			p.next()
+			return
+		case tk.text == "}":
+			return
+		}
+		p.next()
 	}
 }
 
@@ -185,6 +263,43 @@ func (p *parser) parseEnumDecl() Decl {
 	return &EnumDecl{Name: name, TypeParams: tps, Variants: vars, Line: line}
 }
 
+func (p *parser) parseStructDecl() Decl {
+	line := p.next().line // type
+	name := p.expectIdent()
+	if p.cur().text != "struct" {
+		p.errorf(p.cur().line, "only struct types are supported, got %q", p.cur().text)
+	}
+	p.next()
+	p.skipNL()
+	p.expect("{")
+	var fields []Field
+	for {
+		p.skipNL()
+		if p.cur().text == "}" {
+			p.next()
+			break
+		}
+		if p.cur().kind == kEOF {
+			p.diag.errorf(line, "unterminated struct declaration")
+			break
+		}
+		fline := p.cur().line
+		names := []string{p.expectIdent()}
+		for p.cur().text == "," {
+			p.next()
+			names = append(names, p.expectIdent())
+		}
+		ty := p.parseType()
+		for _, n := range names {
+			fields = append(fields, Field{Name: n, Type: ty, Line: fline})
+		}
+		if p.cur().text == ";" {
+			p.next()
+		}
+	}
+	return &StructDecl{Name: name, Fields: fields, Line: line}
+}
+
 // ---------- types ----------
 
 func (p *parser) parseType() TypeExpr {
@@ -251,10 +366,31 @@ func (p *parser) parseBlock() *Block {
 			return &Block{List: list, Line: line}
 		}
 		if p.cur().kind == kEOF {
-			p.errorf(p.cur().line, "unterminated block")
+			p.diag.errorf(line, "unterminated block")
+			return &Block{List: list, Line: line}
 		}
-		list = append(list, p.parseStmt())
+		if s := p.tryStmt(); s != nil {
+			list = append(list, s)
+		}
 	}
+}
+
+// tryStmt parses one statement; on a parse error it records the
+// diagnostic, synchronizes to the next statement boundary, and returns nil.
+func (p *parser) tryStmt() (s Stmt) {
+	defer func() {
+		if r := recover(); r != nil {
+			if pe, ok := r.(parseError); ok {
+				line, msg := splitLinePrefix(pe.msg)
+				p.diag.errorf(line, "%s", msg)
+				p.synchronizeStmt()
+				s = nil
+				return
+			}
+			panic(r)
+		}
+	}()
+	return p.parseStmt()
 }
 
 func (p *parser) parseStmt() Stmt {
@@ -319,7 +455,7 @@ func (p *parser) parseVar() Stmt {
 
 func (p *parser) parseIf() Stmt {
 	line := p.next().line // if
-	cond := p.parseExpr(1)
+	cond := p.parseCond()
 	then := p.parseBlock()
 	var els Stmt
 	save := p.pos
@@ -343,7 +479,10 @@ func (p *parser) parseFor() Stmt {
 	if p.cur().text == "{" {
 		return &ForStmt{Body: p.parseBlock(), Line: line}
 	}
+	save := p.noStructLit
+	p.noStructLit = true
 	first := p.parseExprList()
+	p.noStructLit = save
 	if p.cur().text == "{" {
 		return &ForStmt{Cond: first[0], Body: p.parseBlock(), Line: line}
 	}
@@ -389,7 +528,7 @@ func (p *parser) parseMatch() Expr {
 	}
 	var subj Expr
 	if p.cur().text != "{" {
-		subj = p.parseExpr(1)
+		subj = p.parseCond()
 	}
 	p.expect("{")
 	var arms []MatchArm
@@ -400,11 +539,32 @@ func (p *parser) parseMatch() Expr {
 			break
 		}
 		if p.cur().kind == kEOF {
-			p.errorf(line, "unterminated match")
+			p.diag.errorf(line, "unterminated match")
+			break
 		}
-		arms = append(arms, p.parseArm())
+		if a, ok := p.tryArm(); ok {
+			arms = append(arms, a)
+		}
 	}
 	return &MatchExpr{Subject: subj, Arms: arms, Fair: fair, Line: line}
+}
+
+// tryArm parses one match arm; on a parse error it records the diagnostic,
+// synchronizes to the next arm boundary, and returns false.
+func (p *parser) tryArm() (a MatchArm, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if pe, ok := r.(parseError); ok {
+				line, msg := splitLinePrefix(pe.msg)
+				p.diag.errorf(line, "%s", msg)
+				p.synchronizeStmt()
+				ok = false
+				return
+			}
+			panic(r)
+		}
+	}()
+	return p.parseArm(), true
 }
 
 func (p *parser) parseArm() MatchArm {
@@ -532,9 +692,14 @@ func (p *parser) parseExpr(minPrec int) Expr {
 func (p *parser) parseUnary() Expr {
 	tk := p.cur()
 	switch tk.text {
-	case "-", "!", "<-", "+", "^":
+	case "-", "!", "+", "^", "&", "*":
 		p.next()
 		return &UnaryExpr{Op: tk.text, X: p.parseUnary(), Line: tk.line}
+	case "<-":
+		// spec §5 removal: bare channel receive is gone, use ch.recv()
+		p.errorf(tk.line, "<- was removed in go++ — use ch.recv() and ch.send(v)")
+		p.next()
+		return p.parseUnary()
 	}
 	return p.parsePostfix()
 }
@@ -553,10 +718,63 @@ func (p *parser) parsePostfix() Expr {
 			idx := p.parseExprList()
 			p.expect("]")
 			x = &IndexExpr{X: x, Index: idx, Line: p.cur().line}
+		case "?":
+			p.next()
+			x = &TryExpr{X: x, Line: p.cur().line}
+		case "{":
+			if p.noStructLit {
+				return x
+			}
+			x = p.parseStructLit(x)
 		default:
 			return x
 		}
 	}
+}
+
+// parseStructLit parses `{ Name: v, ... }` / `{ v, ... }` after a type
+// name in expression position.
+func (p *parser) parseStructLit(x Expr) Expr {
+	line := p.cur().line
+	var te TypeExpr
+	switch t := x.(type) {
+	case *Ident:
+		te = &IdentType{Name: t.Name, Line: t.Line}
+	default:
+		p.errorf(line, "expected a struct type name before {")
+	}
+	p.next() // {
+	var fields []FieldVal
+	for {
+		p.skipNL()
+		if p.cur().text == "}" {
+			p.next()
+			break
+		}
+		fl := p.cur().line
+		if p.cur().kind == kIdent && p.peek().text == ":" {
+			name := p.next().text
+			p.next() // :
+			v := p.parseExpr(1)
+			fields = append(fields, FieldVal{Name: name, Value: v, Line: fl})
+		} else {
+			v := p.parseExpr(1)
+			fields = append(fields, FieldVal{Value: v, Line: fl})
+		}
+		if p.cur().text == "," {
+			p.next()
+		}
+	}
+	return &StructLitExpr{Type: te, Fields: fields, Line: line}
+}
+
+// parseCond parses a condition expression with composite literals
+// disabled (Go's ambiguity rule).
+func (p *parser) parseCond() Expr {
+	save := p.noStructLit
+	p.noStructLit = true
+	defer func() { p.noStructLit = save }()
+	return p.parseExpr(1)
 }
 
 func (p *parser) parseCallArgs() []Expr {

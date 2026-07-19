@@ -1,0 +1,21 @@
+package main
+func main() {
+    var a int8 = 300 //~ ERROR constant 300 overflows int8
+    var b uint8 = -1 //~ ERROR constant -1 overflows uint8
+    var c int32 = 128
+    var d int64 = 5
+    e := c + d //~ ERROR invalid operation: int32 + int64 (mismatched types)
+    _ = e
+    f := c < d //~ ERROR invalid comparison: int32 < int64 (mismatched types)
+    _ = f
+    g := string(5) //~ ERROR cannot convert int to string
+    _ = g
+    h := int8("x") //~ ERROR cannot convert string to int8
+    _ = h
+    i := bool(1) //~ ERROR cannot convert int to bool
+    _ = i
+    j := int64(1, 2) //~ ERROR conversion to int64 takes 1 argument, got 2
+    _ = j
+    _ = a
+    _ = b
+}

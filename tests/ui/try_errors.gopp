@@ -1,0 +1,21 @@
+package main
+func res() Result[int, string] { return Ok[int, string](1) }
+func num() int { return 5 }
+func a() Result[int, string] {
+    x := num()? //~ ERROR ? needs a Result[T, E], got int
+    return Ok[int, string](x)
+}
+func b() int {
+    y := res()? //~ ERROR ? requires the function to return Result[T, string]
+    return y
+}
+func c() Result[int, int] {
+    z := res()? //~ ERROR expected int, found string
+    return Ok[int, int](z)
+}
+func d() Result[int, string] {
+    w := println(res()?) //~ ERROR ? can only be used directly
+    _ = w
+    return Ok[int, string](1)
+}
+func main() {}
