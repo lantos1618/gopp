@@ -34,10 +34,10 @@ feature; documented in SPEC.md) · ❌ not done
 | 24 | definite initialization | ⚠️ by design: Go zero values + maps auto-init (SPEC.md) |
 | 25 | all-paths-return, unreachable code | ✅ |
 | 26 | const eval + fuel | ✅ `comptime expr`: big.Int exact math, overflow/div-zero are compile errors, fuel limit |
-| 27 | diagnostics: spans, secondary labels, suggestions | ⚠️ line numbers ✅; labels/suggestions ❌ |
+| 27 | diagnostics: spans, secondary labels, suggestions | ✅ snippets+carets (parse cols), notes (return blame, redecl), did-you-mean; sema cols deferred |
 | 28 | test harness `//~ ERROR`, snapshots, fuzzing | ✅ annotations both directions + fuzz |
 
-**Score: 11 full ✅ · 9 partial ⚠️ · 8 N/A by language scope · 0 unaddressed**
+**Score: 12 full ✅ · 8 partial ⚠️ · 8 N/A by language scope · 0 unaddressed**
 
 Language-level wins beyond the skeleton (the "better types" program):
 removals of `error` / `any` / `<-` / nil maps · untyped literals with
@@ -67,13 +67,14 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
 
 1. ~~Parser recovery~~ ✅ · ~~Structs~~ ✅ · ~~`?` try~~ ✅ ·
    ~~better types (removals, widths, conversions, ctor inference)~~ ✅ ·
-   ~~`comptime` expr (§10)~~ ✅
+   ~~`comptime` expr (§10)~~ ✅ · ~~diagnostics polish (§11)~~ ✅
 2. **Imports / modules** — reactivates §3 module tree, §8 paths, §9
    import fixpoint.
-4. **Diagnostics polish** (§11) — column spans, secondary labels
-   ("expected because of this"), more suggestions.
-5. **§17 interning + §1 integer IDs** — when compile times or LSP make
+3. **§17 interning + §1 integer IDs** — when compile times or LSP make
    them pay; both are wrappers, not rewrites, by design.
+4. **Sema column spans** — expressions carry lines only; threading cols
+   through the AST is a deliberate defer (render falls back to
+   line-level snippets).
 
 Cancelled: `@derive` (superseded by the better-types program — the
 language fixes the types instead of generating boilerplate over weak

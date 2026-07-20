@@ -26,12 +26,26 @@ func (s Severity) String() string {
 	return "error"
 }
 
-// Diagnostic is a single compiler diagnostic. Line is 1-based; 0 means
-// "not attached to a source line".
+// Diagnostic is a single compiler diagnostic. Line and Col are 1-based;
+// 0 means "not attached to a source position".
 type Diagnostic struct {
-	Line int
-	Sev  Severity
-	Msg  string
+	Line  int
+	Col   int
+	Sev   Severity
+	Msg   string
+	Notes []Note
+}
+
+// Note is a secondary label (§11): it points at the code that EXPLAINS
+// the primary diagnostic — "expected because of this", "declared here".
+type Note struct {
+	Line, Col int
+	Msg       string
+}
+
+// note attaches a secondary label to the diagnostic.
+func (d *Diagnostic) note(line, col int, msg string) {
+	d.Notes = append(d.Notes, Note{Line: line, Col: col, Msg: msg})
 }
 
 func (d Diagnostic) String() string {
@@ -47,7 +61,14 @@ type Diagnostics struct {
 }
 
 func (d *Diagnostics) errorf(line int, format string, args ...any) {
-	d.items = append(d.items, Diagnostic{Line: line, Sev: sevErr, Msg: fmt.Sprintf(format, args...)})
+	d.errorfAt(line, 0, format, args...)
+}
+
+// errorfAt records an error with a column and returns it so the caller
+// can attach secondary labels.
+func (d *Diagnostics) errorfAt(line, col int, format string, args ...any) *Diagnostic {
+	d.items = append(d.items, Diagnostic{Line: line, Col: col, Sev: sevErr, Msg: fmt.Sprintf(format, args...)})
+	return &d.items[len(d.items)-1]
 }
 
 func (d *Diagnostics) warnf(line int, format string, args ...any) {
@@ -88,4 +109,47 @@ func (d *Diagnostics) String() string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// Render formats diagnostics for humans (§11): a greppable
+// "line:col: error:" header, the source line with a caret under the
+// column, and secondary labels with snippets of their own.
+func (d *Diagnostics) Render(src string) string {
+	lines := strings.Split(src, "\n")
+	var b strings.Builder
+	for _, it := range d.sorted() {
+		renderOne(&b, it, lines)
+	}
+	return b.String()
+}
+
+func renderOne(b *strings.Builder, d Diagnostic, lines []string) {
+	if d.Line > 0 && d.Col > 0 {
+		fmt.Fprintf(b, "line %d:%d: %s: %s\n", d.Line, d.Col, d.Sev, d.Msg)
+	} else {
+		b.WriteString(d.String())
+		b.WriteByte('\n')
+	}
+	renderSnippet(b, d.Line, d.Col, lines)
+	for _, n := range d.Notes {
+		if n.Line > 0 {
+			fmt.Fprintf(b, "  = note: %s (line %d)\n", n.Msg, n.Line)
+		} else {
+			fmt.Fprintf(b, "  = note: %s\n", n.Msg)
+		}
+		renderSnippet(b, n.Line, n.Col, lines)
+	}
+}
+
+func renderSnippet(b *strings.Builder, line, col int, lines []string) {
+	if line <= 0 || line > len(lines) {
+		return
+	}
+	src := strings.ReplaceAll(lines[line-1], "\t", "    ")
+	fmt.Fprintf(b, "  %d | %s\n", line, src)
+	if col > 0 {
+		// caret under the column: gutter + " | " + col-1 spaces
+		b.WriteString("  " + strings.Repeat(" ", len(fmt.Sprint(line))) + " | " +
+			strings.Repeat(" ", col-1) + "^\n")
+	}
 }

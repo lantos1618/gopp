@@ -11,7 +11,10 @@ import "fmt"
 // and the parser synchronizes to the next boundary token. parse() returns
 // everything it found; a parseError never escapes.
 
-type parseError struct{ msg string }
+type parseError struct {
+	line, col int
+	msg       string
+}
 
 func (e parseError) Error() string { return e.msg }
 
@@ -31,8 +34,7 @@ func parse(toks []token) (f *File, diags *Diagnostics) {
 		// last-resort net (e.g. a malformed `package` clause)
 		if r := recover(); r != nil {
 			if pe, ok := r.(parseError); ok {
-				line, msg := splitLinePrefix(pe.msg)
-				p.diag.errorf(line, "%s", msg)
+				p.diag.errorfAt(pe.line, pe.col, "%s", pe.msg)
 			} else {
 				panic(r)
 			}
@@ -61,19 +63,24 @@ func (p *parser) skipNL() {
 }
 
 func (p *parser) errorf(line int, format string, args ...any) {
-	panic(parseError{fmt.Sprintf("line %d: %s", line, fmt.Sprintf(format, args...))})
+	panic(parseError{line: line, msg: fmt.Sprintf(format, args...)})
+}
+
+// errorft is errorf with the offending token's column attached (§11).
+func (p *parser) errorft(tk token, format string, args ...any) {
+	panic(parseError{line: tk.line, col: tk.col, msg: fmt.Sprintf(format, args...)})
 }
 
 func (p *parser) expect(text string) {
 	if p.cur().text != text {
-		p.errorf(p.cur().line, "expected %q, got %q", text, p.cur().text)
+		p.errorft(p.cur(), "expected %q, got %q", text, p.cur().text)
 	}
 	p.next()
 }
 
 func (p *parser) expectIdent() string {
 	if p.cur().kind != kIdent {
-		p.errorf(p.cur().line, "expected identifier, got %q", p.cur().text)
+		p.errorft(p.cur(), "expected identifier, got %q", p.cur().text)
 	}
 	return p.next().text
 }
@@ -102,8 +109,7 @@ func (p *parser) tryDecl() (d Decl) {
 	defer func() {
 		if r := recover(); r != nil {
 			if pe, ok := r.(parseError); ok {
-				line, msg := splitLinePrefix(pe.msg)
-				p.diag.errorf(line, "%s", msg)
+				p.diag.errorfAt(pe.line, pe.col, "%s", pe.msg)
 				p.synchronizeDecl()
 				d = nil
 				return
@@ -119,9 +125,9 @@ func (p *parser) tryDecl() (d Decl) {
 	case "type":
 		return p.parseStructDecl()
 	case "import":
-		p.errorf(p.cur().line, "import is not supported in v2 yet")
+		p.errorft(p.cur(), "import is not supported in v2 yet")
 	}
-	p.errorf(p.cur().line, "expected declaration, got %q", p.cur().text)
+	p.errorft(p.cur(), "expected declaration, got %q", p.cur().text)
 	return nil
 }
 
@@ -267,7 +273,7 @@ func (p *parser) parseStructDecl() Decl {
 	line := p.next().line // type
 	name := p.expectIdent()
 	if p.cur().text != "struct" {
-		p.errorf(p.cur().line, "only struct types are supported, got %q", p.cur().text)
+		p.errorft(p.cur(), "only struct types are supported, got %q", p.cur().text)
 	}
 	p.next()
 	p.skipNL()
@@ -381,8 +387,7 @@ func (p *parser) tryStmt() (s Stmt) {
 	defer func() {
 		if r := recover(); r != nil {
 			if pe, ok := r.(parseError); ok {
-				line, msg := splitLinePrefix(pe.msg)
-				p.diag.errorf(line, "%s", msg)
+				p.diag.errorfAt(pe.line, pe.col, "%s", pe.msg)
 				p.synchronizeStmt()
 				s = nil
 				return
@@ -422,9 +427,9 @@ func (p *parser) parseStmt() Stmt {
 	case "var":
 		return p.parseVar()
 	case "select", "switch", "case":
-		p.errorf(tk.line, "%q was removed in go++ — use match", tk.text)
+		p.errorft(tk, "%q was removed in go++ — use match", tk.text)
 	case "go", "defer", "const", "type", "import", "continue", "goto":
-		p.errorf(tk.line, "%q is not supported in v2 yet", tk.text)
+		p.errorft(tk, "%q is not supported in v2 yet", tk.text)
 	}
 	lhs := p.parseExprList()
 	switch p.cur().text {
@@ -436,7 +441,7 @@ func (p *parser) parseStmt() Stmt {
 		return &IncDecStmt{X: lhs[0], Op: op, Line: tk.line}
 	}
 	if len(lhs) > 1 {
-		p.errorf(tk.line, "unexpected expression list in statement")
+		p.errorft(tk, "unexpected expression list in statement")
 	}
 	return &ExprStmt{X: lhs[0], Line: tk.line}
 }
@@ -555,8 +560,7 @@ func (p *parser) tryArm() (a MatchArm, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			if pe, ok := r.(parseError); ok {
-				line, msg := splitLinePrefix(pe.msg)
-				p.diag.errorf(line, "%s", msg)
+				p.diag.errorfAt(pe.line, pe.col, "%s", pe.msg)
 				p.synchronizeStmt()
 				ok = false
 				return
@@ -697,7 +701,7 @@ func (p *parser) parseUnary() Expr {
 		return &UnaryExpr{Op: tk.text, X: p.parseUnary(), Line: tk.line}
 	case "<-":
 		// spec §5 removal: bare channel receive is gone, use ch.recv()
-		p.errorf(tk.line, "<- was removed in go++ — use ch.recv() and ch.send(v)")
+		p.errorft(tk, "<- was removed in go++ — use ch.recv() and ch.send(v)")
 		p.next()
 		return p.parseUnary()
 	}
@@ -824,6 +828,6 @@ func (p *parser) parsePrimary() Expr {
 		p.expect(")")
 		return e
 	}
-	p.errorf(tk.line, "expected expression, got %q", tk.text)
+	p.errorft(tk, "expected expression, got %q", tk.text)
 	return nil
 }

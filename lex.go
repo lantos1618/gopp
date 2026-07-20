@@ -22,6 +22,7 @@ type token struct {
 	kind tokKind
 	text string
 	line int
+	col  int // 1-based byte column of the token's first byte
 }
 
 var ops3 = []string{"<<=", ">>=", "&^=", "..."}
@@ -35,8 +36,10 @@ func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 func lex(src string) ([]token, error) {
 	var toks []token
 	line := 1
+	lineStart := 0 // byte offset of the current line's first byte
 	i, n := 0, len(src)
-	emit := func(k tokKind, s string) { toks = append(toks, token{k, s, line}) }
+	// emit is always called with i at the token's first byte
+	emit := func(k tokKind, s string) { toks = append(toks, token{k, s, line, i - lineStart + 1}) }
 	for i < n {
 		c := src[i]
 		switch {
@@ -46,6 +49,7 @@ func lex(src string) ([]token, error) {
 			emit(kNewline, "\n")
 			line++
 			i++
+			lineStart = i
 		case c == '/' && i+1 < n && src[i+1] == '/':
 			for i < n && src[i] != '\n' {
 				i++
@@ -57,6 +61,7 @@ func lex(src string) ([]token, error) {
 				if src[i] == '\n' {
 					nl = true
 					line++
+					lineStart = i + 1
 				}
 				i++
 			}
@@ -130,6 +135,7 @@ func lex(src string) ([]token, error) {
 			for j < n && src[j] != '`' {
 				if src[j] == '\n' {
 					line++
+					lineStart = j + 1
 				}
 				j++
 			}
@@ -177,6 +183,6 @@ func lex(src string) ([]token, error) {
 			i += len(matched)
 		}
 	}
-	toks = append(toks, token{kEOF, "", line})
+	toks = append(toks, token{kEOF, "", line, i - lineStart + 1})
 	return toks, nil
 }

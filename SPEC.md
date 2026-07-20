@@ -14,6 +14,13 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - **§11 never stop at the first error.** A failed check records one
   diagnostic and yields the poison type `tError`, which unifies silently
   with everything. One bug = one diagnostic, no cascades.
+- **§11 diagnostics are for humans.** The default rendering shows the
+  source line with a caret (`line 3:10: error: ...` + snippet) — columns
+  are exact for syntax errors; sema errors are line-level (documented,
+  since expressions carry lines only). Secondary labels explain the
+  primary error: return mismatches point at the declared return type,
+  redeclarations at the previous declaration. Undefined names get a
+  deterministic edit-distance "did you mean X?" suggestion.
 - **§1 side tables.** Expression types, resolved variant constructors, and
   pattern roles live in maps on the checker, not in the AST.
 

@@ -236,6 +236,7 @@ func subst(ty Type, params []string, args []Type) Type {
 type scope struct {
 	parent *scope
 	vars   map[string]Type
+	lines  map[string]int // declaration lines, for "redeclared" notes (§11)
 }
 
 func (s *scope) lookup(name string) (Type, bool) {
@@ -264,8 +265,9 @@ type checker struct {
 	ambiguous  map[string]bool
 	globals    *scope
 	cur        *scope
-	curResults []Type
-	loopDepth  int
+	curResults  []Type
+	curFuncLine int // declaration line of the function being checked (§11 notes)
+	loopDepth   int
 	// outputs for the emitter (side tables, §1)
 	types      map[Expr]Type
 	resolved   map[Expr]*ctorTarget // idents/call-funs that are variant references
@@ -409,6 +411,7 @@ func check(f *File) (*checker, *Diagnostics) {
 				continue
 			}
 			c.curResults = ft.results
+			c.curFuncLine = fn.Line // for "expected because of this" notes (§11)
 			c.cur = &scope{parent: c.globals, vars: map[string]Type{}}
 			for i, p := range fn.Params {
 				if i < len(ft.params) {
@@ -550,6 +553,26 @@ func (c *checker) child() *scope {
 
 func (c *checker) pop() { c.cur = c.cur.parent }
 
+// declareShort binds a name for :=, enforcing the shadowing policy
+// (§3/§29: allowed across scopes, an error within the same scope) and
+// pointing at the previous declaration when it fires (§11).
+func (c *checker) declareShort(id *Ident, t Type, line int) {
+	if id.Name == "_" {
+		return // the blank identifier is assignable to, never read
+	}
+	if _, dup := c.cur.vars[id.Name]; dup {
+		d := c.diag.errorfAt(line, 0, "%s redeclared in this scope", id.Name)
+		if prev, ok := c.cur.lines[id.Name]; ok {
+			d.note(prev, 0, "previous declaration of "+id.Name+" here")
+		}
+	}
+	c.cur.vars[id.Name] = t
+	if c.cur.lines == nil {
+		c.cur.lines = map[string]int{}
+	}
+	c.cur.lines[id.Name] = line
+}
+
 func (c *checker) checkStmt(s Stmt) {
 	switch st := s.(type) {
 	case *Block:
@@ -588,12 +611,7 @@ func (c *checker) checkStmt(s Stmt) {
 						c.diag.errorf(st.Line, "left side of := must be a name")
 						continue
 					}
-					if id.Name != "_" {
-						if _, dup := c.cur.vars[id.Name]; dup {
-							c.diag.errorf(st.Line, "%s redeclared in this scope", id.Name)
-						}
-						c.cur.vars[id.Name] = rt
-					}
+					c.declareShort(id, rt, st.Line)
 				} else {
 					if id, ok := st.Lhs[i].(*Ident); ok && id.Name == "_" {
 						continue
@@ -613,14 +631,7 @@ func (c *checker) checkStmt(s Stmt) {
 					c.diag.errorf(st.Line, "left side of := must be a name")
 					continue
 				}
-				if id.Name != "_" {
-					// shadowing policy (§3/§29): allowed across scopes,
-					// an error within the same scope (like Go).
-					if _, dup := c.cur.vars[id.Name]; dup {
-						c.diag.errorf(st.Line, "%s redeclared in this scope", id.Name)
-					}
-					c.cur.vars[id.Name] = rt
-				}
+				c.declareShort(id, rt, st.Line)
 			} else {
 				// the blank identifier is assignable to, never read
 				if id, ok := st.Lhs[i].(*Ident); ok && id.Name == "_" {
@@ -691,7 +702,13 @@ func (c *checker) checkStmt(s Stmt) {
 			return
 		}
 		for i, r := range st.Results {
+			// a mismatch here is explained by the signature (§11):
+			// attach "expected because of this" to any new diagnostic
+			before := len(c.diag.items)
 			c.checkAgainst(r, c.curResults[i], st.Line)
+			for k := before; k < len(c.diag.items); k++ {
+				c.diag.items[k].note(c.curFuncLine, 0, "because of the return type declared here")
+			}
 		}
 	case *IncDecStmt:
 		xt := c.checkExpr(st.X)
@@ -1153,8 +1170,72 @@ func (c *checker) checkIdentValue(ex *Ident) Type {
 		}
 		return ft
 	}
-	c.diag.errorf(ex.Line, "undefined: %s", ex.Name)
+	d := c.diag.errorfAt(ex.Line, 0, "undefined: %s", ex.Name)
+	if sug := c.suggestName(ex.Name); sug != "" {
+		d.note(0, 0, "did you mean "+sug+"?")
+	}
 	return terr
+}
+
+// suggestName finds the closest visible name by edit distance (§11).
+// Deterministic: candidates are considered in sorted order and ties
+// keep the first.
+func (c *checker) suggestName(name string) string {
+	seen := map[string]bool{}
+	var cands []string
+	add := func(s string) {
+		if !seen[s] {
+			seen[s] = true
+			cands = append(cands, s)
+		}
+	}
+	for sc := c.cur; sc != nil; sc = sc.parent {
+		for v := range sc.vars {
+			add(v)
+		}
+	}
+	for f := range c.funcs {
+		add(f)
+	}
+	for ctor := range c.ctors {
+		add(ctor)
+	}
+	for _, b := range []string{"println", "print", "panic", "len", "cap", "append", "true", "false"} {
+		add(b)
+	}
+	sort.Strings(cands)
+	best, bestDist := "", len(name)/3+1
+	if bestDist < 2 {
+		bestDist = 2
+	}
+	for _, cand := range cands {
+		if d := editDistance(name, cand); d < bestDist {
+			best, bestDist = cand, d
+		}
+	}
+	return best
+}
+
+// editDistance is the classic Levenshtein DP over runes.
+func editDistance(a, b string) int {
+	ar, br := []rune(a), []rune(b)
+	prev := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ar); i++ {
+		cur := make([]int, len(br)+1)
+		cur[0] = i
+		for j := 1; j <= len(br); j++ {
+			cost := 1
+			if ar[i-1] == br[j-1] {
+				cost = 0
+			}
+			cur[j] = min(min(cur[j-1]+1, prev[j]+1), prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(br)]
 }
 
 // checkCall checks a call. want is the expected type in CHECK mode (nil in
