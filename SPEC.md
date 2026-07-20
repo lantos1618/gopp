@@ -46,7 +46,8 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - In arithmetic and comparison an untyped constant yields to the typed
   operand (`a + 1` has `a`'s type); two untyped constants stay untyped
   until defaulted. `duration` absorbs any numeric operand (it is an
-  int64 count; `d * 3` must stay convenient).
+  int64 count; `d * 3` must stay convenient). `%`, bit ops, and shifts
+  require integer operands — no float `%`, no float shift counts.
 - **No implicit conversions between typed values.** `int8 + int64` and
   `int32 < int64` are "mismatched types" errors. The escape hatch is an
   explicit conversion, `int64(x)` — a basic type name in call position.
@@ -139,9 +140,32 @@ but null pointer constants do not — there is no way to write one.
   There are no nil maps in go++ (the silent-crash footgun that motivated
   the language).
 - Overflow, division by zero, evaluation order: exactly Go's semantics —
-  go++ emits Go and runs on its runtime. No const evaluation exists yet
-  because the language has no `const` declarations (§10 deferred).
+  go++ emits Go and runs on its runtime.
 - `break loop` targets the innermost `loop {}` block.
+
+## Const evaluation (§10)
+
+- `comptime expr` evaluates at compile time. Allowed inside: literals,
+  the prelude duration constants (`ms`, `second`, `minute`), `true` /
+  `false`, arithmetic / bit ops / shifts / comparison / logic, string
+  concat, conversions, and nested `comptime`. Everything else —
+  variables, function calls, channels, matches — is "not a constant
+  expression".
+- Integer math is exact (arbitrary precision, like Go constants);
+  floats are float64 (a documented divergence from Go's
+  arbitrary-precision constant floats).
+- Errors are compile-time, with the runtime's own rules (§29):
+  division/modulo by zero, overflow of a typed integer
+  (`comptime int8(100) + int8(100)`), overflow of the default type
+  (`comptime 1 << 100` overflows `int`), overflow against the declared
+  type (`var x int8 = comptime 100 + 100`), shift counts above 4096,
+  and the fuel limit — the compiler diagnoses, never hangs.
+- The folded constant's type is the inner expression's type; untyped
+  rules (§7) still apply at the use site. The emitter writes the
+  constant, wrapped in a conversion when the type isn't the default
+  (`int64(42)`, `time.Duration(60)`).
+- Full comptime *functions* (compile-time execution of user code,
+  codegen) stay deferred — this is values only.
 
 ## Memory model
 
@@ -156,7 +180,8 @@ drop order) do not apply and are deliberately deleted from the roadmap.
   monomorphic language checks end to end first. This brings unification,
   deferred obligations, and the occurs check.
 - **§14 operator overloading** — needs behaviors first.
-- **§10 const eval** — no `const` declarations exist; arrives with them.
+- **§10 comptime functions** — `comptime expr` (values) landed; running
+  user functions at compile time is a separate, larger feature.
 - **§16 macros, §19 glob imports, §25 effects** — no syntax for them.
 - **§27/§28 incremental + LSP** — the pass architecture and side tables
   were built so these wrap around, not rewrite in. Later.

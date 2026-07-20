@@ -1,0 +1,34 @@
+package main
+
+// comptime expr (§10): constant expressions evaluated at compile time.
+// Zero diagnostics expected.
+func main() {
+    x := comptime 1 + 2*3
+    _ = x
+    var y int64 = comptime 1 << 40
+    _ = y
+    s := comptime "foo" + "bar"
+    _ = s
+    b := comptime 1 < 2 && !false
+    _ = b
+    d := comptime second * 3
+    _ = d
+    f := comptime 2.5 * 4
+    _ = f
+    r := comptime string(rune(97))
+    _ = r
+    n := comptime -5 + 3
+    _ = n
+    var u uint8 = comptime 200 + 55
+    _ = u
+    mod := comptime 17 % 5
+    _ = mod
+    sh := comptime 256 >> 4
+    _ = sh
+    q := comptime minute / second
+    _ = q
+    w := comptime int64(7) * 6
+    _ = w
+    z := comptime comptime 1 + 1
+    _ = z
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -21,11 +22,11 @@ type emitter struct {
 	tmp        int
 	loops      []string
 	curResults []Type // enclosing function's results (for ? desugars)
+	needTime   bool   // emitted time.Duration somewhere: add the import
 }
 
 func emit(f *File, c *checker) string {
 	e := &emitter{c: c}
-	e.s("package %s\n\n", f.PkgName)
 	for _, d := range f.Decls {
 		switch dd := d.(type) {
 		case *EnumDecl:
@@ -36,7 +37,11 @@ func emit(f *File, c *checker) string {
 			e.emitFunc(dd)
 		}
 	}
-	return e.buf.String()
+	head := "package " + f.PkgName + "\n\n"
+	if e.needTime {
+		head += "import \"time\"\n\n"
+	}
+	return head + e.buf.String()
 }
 
 func (e *emitter) s(format string, args ...any) {
@@ -55,6 +60,7 @@ func (e *emitter) typeGo(t Type) string {
 	switch tt := t.(type) {
 	case tBasic:
 		if tt.name == "duration" {
+			e.needTime = true
 			return "time.Duration"
 		}
 		return tt.name
@@ -396,6 +402,14 @@ func (e *emitter) expr(x Expr) string {
 		return ex.Op + e.expr(ex.X)
 	case *CallExpr:
 		return e.call(ex)
+	case *ComptimeExpr:
+		// sema evaluated it (§10); emit the constant, wrapped in its
+		// type when the type isn't the value's default
+		cv, ok := e.c.constVals[ex]
+		if !ok {
+			return "0 /* unreachable: comptime not evaluated */"
+		}
+		return e.constGo(ex, cv)
 	case *SelectorExpr:
 		// (*p).Field — a bare unary operand would bind the selector first
 		if _, isUnary := ex.X.(*UnaryExpr); isUnary {
@@ -464,6 +478,50 @@ func (e *emitter) typeArgsGo(ts []Type) []string {
 		out[i] = e.typeGo(t)
 	}
 	return out
+}
+
+// constGo renders a compile-time-evaluated constant as Go source. A typed
+// result keeps its type via a wrapping conversion (x := int8(5), not
+// x := 5); untyped-default values stay bare. Negative numbers are
+// parenthesized so the literal is safe in any expression context.
+func (e *emitter) constGo(ex *ComptimeExpr, cv constVal) string {
+	t := e.c.types[ex]
+	switch cv.kind {
+	case ckInt:
+		s := cv.i.String()
+		if cv.i.Sign() < 0 {
+			s = "(" + s + ")"
+		}
+		if b, ok := t.(tBasic); ok && b.name != "int" {
+			return b.name + "(" + s + ")"
+		}
+		return s
+	case ckDuration:
+		e.needTime = true
+		return "time.Duration(" + cv.i.String() + ")"
+	case ckFloat:
+		s := strconv.FormatFloat(cv.f, 'g', -1, 64)
+		if !strings.ContainsAny(s, ".eE") {
+			s += ".0" // keep it a float literal
+		}
+		if cv.f < 0 {
+			s = "(" + s + ")"
+		}
+		if b, ok := t.(tBasic); ok && b.name == "float32" {
+			return "float32(" + s + ")"
+		}
+		return s
+	case ckString:
+		return strconv.Quote(cv.s)
+	case ckBool:
+		if cv.b {
+			return "true"
+		}
+		return "false"
+	case ckRune:
+		return strconv.QuoteRune(rune(cv.i.Int64()))
+	}
+	return "0 /* unreachable: bad const */"
 }
 
 func (e *emitter) call(ex *CallExpr) string {
@@ -740,6 +798,8 @@ func renameExpr(x Expr, from, to string) {
 		for i := range ex.Arms {
 			renameArm(&ex.Arms[i], from, to)
 		}
+	case *ComptimeExpr:
+		renameExpr(ex.X, from, to)
 	}
 }
 

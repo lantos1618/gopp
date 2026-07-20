@@ -33,11 +33,11 @@ feature; documented in SPEC.md) · ❌ not done
 | 23 | exhaustiveness + usefulness, guards excluded | ✅ (flat patterns — Maranget unneeded until nesting) |
 | 24 | definite initialization | ⚠️ by design: Go zero values + maps auto-init (SPEC.md) |
 | 25 | all-paths-return, unreachable code | ✅ |
-| 26 | const eval + fuel | ➖ no `const` decls |
+| 26 | const eval + fuel | ✅ `comptime expr`: big.Int exact math, overflow/div-zero are compile errors, fuel limit |
 | 27 | diagnostics: spans, secondary labels, suggestions | ⚠️ line numbers ✅; labels/suggestions ❌ |
 | 28 | test harness `//~ ERROR`, snapshots, fuzzing | ✅ annotations both directions + fuzz |
 
-**Score: 10 full ✅ · 9 partial ⚠️ · 9 N/A by language scope · 0 unaddressed**
+**Score: 11 full ✅ · 9 partial ⚠️ · 8 N/A by language scope · 0 unaddressed**
 
 Language-level wins beyond the skeleton (the "better types" program):
 removals of `error` / `any` / `<-` / nil maps · untyped literals with
@@ -66,10 +66,9 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
 ## Next up, in dependency order
 
 1. ~~Parser recovery~~ ✅ · ~~Structs~~ ✅ · ~~`?` try~~ ✅ ·
-   ~~better types (removals, widths, conversions, ctor inference)~~ ✅
-2. **`comptime` expr** — const eval with fuel (§10); the checker already
-   range-checks literals, this generalizes it to expressions.
-3. **Imports / modules** — reactivates §3 module tree, §8 paths, §9
+   ~~better types (removals, widths, conversions, ctor inference)~~ ✅ ·
+   ~~`comptime` expr (§10)~~ ✅
+2. **Imports / modules** — reactivates §3 module tree, §8 paths, §9
    import fixpoint.
 4. **Diagnostics polish** (§11) — column spans, secondary labels
    ("expected because of this"), more suggestions.

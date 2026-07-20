@@ -270,6 +270,7 @@ type checker struct {
 	types      map[Expr]Type
 	resolved   map[Expr]*ctorTarget // idents/call-funs that are variant references
 	inferred   map[Expr][]Type      // ctor exprs whose type args were inferred (§8-lite)
+	constVals  map[Expr]constVal    // comptime exprs -> compile-time values (§10)
 	patVariant map[Pattern]bool     // IdentPat that matches a unit variant (not a binding)
 	cycleDone  map[*StructDecl]bool // structs already reported on an infinite-size cycle
 }
@@ -302,6 +303,7 @@ func check(f *File) (*checker, *Diagnostics) {
 		types:      map[Expr]Type{},
 		resolved:   map[Expr]*ctorTarget{},
 		inferred:   map[Expr][]Type{},
+		constVals:  map[Expr]constVal{},
 		patVariant: map[Pattern]bool{},
 	}
 	for _, e := range preludeEnums() {
@@ -715,6 +717,18 @@ func isNumeric(t Type) bool {
 	return false
 }
 
+// isInteger reports whether t is an integer type (typed or an untyped
+// int constant): the operand requirement for %, bit ops, and shifts (§7).
+func isInteger(t Type) bool {
+	if _, ok := t.(tUntypedInt); ok {
+		return true
+	}
+	if b, ok := t.(tBasic); ok {
+		return isSizedInt(b.name)
+	}
+	return false
+}
+
 func isFloat(t Type) bool {
 	if b, ok := t.(tBasic); ok {
 		return b.name == "float32" || b.name == "float64"
@@ -829,6 +843,22 @@ func (c *checker) checkAgainst(e Expr, expected Type, line int) Type {
 		t := c.checkCall(ex, expected)
 		c.types[e] = t
 		c.expect(t, expected, line)
+		return t
+	case *ComptimeExpr:
+		// evaluate, then range-check the constant against the declared
+		// type: var x int8 = comptime 100 + 100 is an error
+		t := c.checkComptime(ex)
+		c.types[e] = t
+		if !isErr(t) {
+			if v, ok := c.constVals[ex]; ok && v.kind == ckInt {
+				if b, ok2 := expected.(tBasic); ok2 && isSizedInt(b.name) && !fitsBigInt(v.i, b.name) {
+					c.diag.errorf(line, "constant %s overflows %s", v.i.String(), expected)
+					c.types[e] = terr
+					return terr
+				}
+			}
+			c.expect(t, expected, line)
+		}
 		return t
 	}
 	t := c.checkExpr(e)
@@ -979,7 +1009,18 @@ func (c *checker) checkExpr(e Expr) Type {
 				c.diag.errorf(ex.Line, "invalid operation: %s + %s (mismatched types)", xt, yt)
 				ty = terr
 			}
-		default: // -, *, /, %, bit ops, shifts
+		case "%", "&", "|", "^", "&^", "<<", ">>":
+			// integer operands only — no float % or float shifts (§7)
+			if !isInteger(xt) || !isInteger(yt) {
+				c.diag.errorf(ex.Line, "invalid operation: %s %s %s (integer operands only)", xt, ex.Op, yt)
+				ty = terr
+			} else if at := arithType(xt, yt); at != nil {
+				ty = at
+			} else {
+				c.diag.errorf(ex.Line, "invalid operation: %s %s %s (mismatched types)", xt, ex.Op, yt)
+				ty = terr
+			}
+		default: // -, *, /
 			if at := arithType(xt, yt); at != nil {
 				ty = at
 			} else {
@@ -1038,6 +1079,8 @@ func (c *checker) checkExpr(e Expr) Type {
 		c.diag.errorf(ex.Line, "? can only be used directly on the right side of := / = / var, or as a statement")
 		c.checkExpr(ex.X)
 		ty = terr
+	case *ComptimeExpr:
+		ty = c.checkComptime(ex)
 	default:
 		c.diag.errorf(0, "unhandled expression %T", e)
 		ty = terr
@@ -1401,6 +1444,11 @@ func (c *checker) checkConversion(ex *CallExpr, name string) Type {
 			c.checkExpr(a)
 		}
 		return terr
+	}
+	// a literal converts directly, with the overflow check — and only
+	// when the target is numeric, so legality is still enforced below
+	if t, ok := c.tryAdopt(ex.Args[0], to, ex.Line); ok {
+		return t // terr on a failed overflow check: poison, don't re-diagnose
 	}
 	from := defaultType(c.checkExpr(ex.Args[0]))
 	if isErr(from) {

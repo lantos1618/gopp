@@ -76,3 +76,11 @@ func TestEndToEndTry(t *testing.T) {
 		t.Fatalf("try.gopp output:\n got %q\nwant %q", got, want)
 	}
 }
+
+func TestEndToEndComptime(t *testing.T) {
+	got := compileAndRun(t, "examples/comptime.gopp")
+	want := "7\n1048576\ngo++\ntrue\n42\n2\n3000\n60\nabc\n"
+	if got != want {
+		t.Fatalf("comptime.gopp output:\n got %q\nwant %q", got, want)
+	}
+}

@@ -1,0 +1,13 @@
+package main
+func main() {
+    println(comptime 1 + 2*3)
+    println(comptime 1 << 20)
+    println(comptime "go" + "++")
+    println(comptime 1 < 2 && !false)
+    println(comptime int64(7) * 6)
+    println(comptime 17 % 5)
+    var x int16 = comptime 1000 * 3
+    println(x)
+    println(comptime minute / second)
+    println(comptime string(rune(97)) + "bc")
+}

@@ -1,0 +1,23 @@
+package main
+func add(a int, b int) int { return a + b }
+func main() {
+    a := comptime 1 / 0 //~ ERROR division by zero in constant expression
+    _ = a
+    b := comptime int8(100) + int8(100) //~ ERROR constant 200 overflows int8
+    _ = b
+    var c int8 = comptime 100 + 100 //~ ERROR constant 200 overflows int8
+    _ = c
+    d := comptime 1 << 100 //~ ERROR overflows int
+    _ = d
+    x := 5
+    e := comptime x + 1 //~ ERROR x is not a constant
+    _ = e
+    f := comptime add(1, 2) //~ ERROR only conversions may be called
+    _ = f
+    g := comptime 1.5 % 2 //~ ERROR integer operands only
+    _ = g
+    h := comptime int8(300) //~ ERROR constant 300 overflows int8
+    _ = h
+    i := comptime println(1) //~ ERROR only conversions may be called
+    _ = i
+}

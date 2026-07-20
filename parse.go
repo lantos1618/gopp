@@ -797,6 +797,9 @@ func (p *parser) parsePrimary() Expr {
 		switch tk.text {
 		case "match":
 			return p.parseMatch()
+		case "comptime":
+			p.next()
+			return &ComptimeExpr{X: p.parseExpr(1), Line: tk.line}
 		case "chan":
 			line := p.next().line
 			p.expect("[")

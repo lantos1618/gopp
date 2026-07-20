@@ -254,6 +254,15 @@ type TryExpr struct {
 	Line int
 }
 
+// ComptimeExpr is `comptime expr`: the expression must be constant —
+// literals, the prelude duration constants, arithmetic/comparison/logic,
+// conversions — and is evaluated at compile time (§10) with fuel and
+// overflow checks. The emitter writes the resulting constant.
+type ComptimeExpr struct {
+	X    Expr
+	Line int
+}
+
 // MatchExpr is both a statement (wrapped in ExprStmt) and an expression.
 // Subject == nil means the subject-less form (channel/boolean arms).
 type MatchExpr struct {
@@ -274,6 +283,7 @@ func (*MakeChanExpr) exprNode()  {}
 func (*MatchExpr) exprNode()     {}
 func (*StructLitExpr) exprNode() {}
 func (*TryExpr) exprNode()       {}
+func (*ComptimeExpr) exprNode()  {}
 
 // ---------- match patterns ----------
 
