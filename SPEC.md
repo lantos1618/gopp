@@ -192,8 +192,41 @@ but null pointer constants do not — there is no way to write one.
   rules (§7) still apply at the use site. The emitter writes the
   constant, wrapped in a conversion when the type isn't the default
   (`int64(42)`, `time.Duration(60)`).
-- Full comptime *functions* (compile-time execution of user code,
-  codegen) stay deferred — this is values only.
+- Full comptime *functions* (compile-time execution of user code in
+  function position) stay deferred — but see metaprogramming below.
+
+## Comptime metaprogramming (§10)
+
+- Top-level `comptime { ... }` blocks run during sema, BEFORE any name
+  registration or type resolution: what they mutate is exactly what the
+  rest of the pipeline (resolution, checking, exhaustiveness, codegen)
+  sees. Blocks execute in source order; `gen` is visible to later blocks,
+  and variables persist across blocks (later blocks use what earlier
+  ones declared).
+- Previously declared things are usable bare: `Color` evaluates to the
+  enum's handle, `greet` to the function's, and a declared function can
+  be CALLED at comptime — `n := fib(10)` interprets the body on the spot
+  (locals, `if`, `for`, `loop`/`break`, `return`; fuel-bounded, call
+  depth capped at 128). Runtime-only constructs (channels, match,
+  println) are "not a comptime expression" there.
+- `decls()` returns live handles to the package's declarations — not
+  snapshots. Field access reads through, assignment writes through:
+  `d.name = d.name + "bar"` renames the actual declaration.
+- Handles: `FuncDecl` (.kind .name .params .results .body),
+  `EnumDecl` (.kind .name .variants), `StructDecl` (.kind .name .fields),
+  `Field` (.name .type), `Variant` (.name .fields). `.params`/`.results`/
+  `.fields`/`.variants` are live lists with `.add(...)`; `.body` is the
+  function's source text (read or replace).
+- Constructors: `Param(name, type)` / `Field(name, type)` (type is source
+  text or a type handle), `Variant(name)`, `Enum(name)`, `Struct(name)`,
+  `Func(name)`; `gen(decl)` injects a built declaration into the package.
+- Statement language: `for x in list { }` (for-in is comptime-only),
+  `if/else`, `:=` / `=` bindings, field assignment, expression statements.
+  Expressions: literals, arithmetic/logic/string ops, field access,
+  indexing, and the builtins `print` (to stderr, like Zig's @compileLog),
+  `len`, `str`, `decls`, `gen`, and the constructors.
+- Sharp edges, on purpose: renaming a type does not rewrite references
+  to it; metaprogramming errors are ordinary diagnostics; fuel-bounded.
 
 ## Memory model
 
@@ -208,9 +241,10 @@ drop order) do not apply and are deliberately deleted from the roadmap.
   monomorphic language checks end to end first. This brings unification,
   deferred obligations, and the occurs check.
 - **§14 operator overloading** — needs behaviors first.
-- **§10 comptime functions** — `comptime expr` (values) landed; running
-  user functions at compile time is a separate, larger feature.
-- **§16 macros, §19 glob imports, §25 effects** — no syntax for them.
+- **§16 macros** — no macro syntax; top-level comptime blocks (§10
+  metaprogramming) cover the code-generation-shaped wants with live AST
+  handles instead of token rewriting.
+- **§19 glob imports, §25 effects** — no syntax for them.
 - **§27/§28 incremental + LSP** — the pass architecture and side tables
   were built so these wrap around, not rewrite in. Later.
 

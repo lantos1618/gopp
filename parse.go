@@ -166,11 +166,24 @@ func (p *parser) tryDecl() (d Decl) {
 		return p.parseEnumDecl()
 	case "type":
 		return p.parseStructDecl()
+	case "comptime":
+		return p.parseComptimeDecl()
 	case "import":
 		p.errorft(p.cur(), "imports must come before declarations")
 	}
 	p.errorft(p.cur(), "expected declaration, got %q", p.cur().text)
 	return nil
+}
+
+// parseComptimeDecl parses a top-level `comptime { ... }` block (§10
+// metaprogramming): the statement list is ordinary syntax, restricted by
+// the comptime interpreter at evaluation time.
+func (p *parser) parseComptimeDecl() Decl {
+	tk := p.next() // comptime
+	if p.cur().text != "{" {
+		p.errorft(p.cur(), "expected { after comptime at top level (comptime expr lives inside functions)")
+	}
+	return &ComptimeDecl{Body: p.parseBlock(), Line: tk.line}
 }
 
 // synchronizeDecl skips tokens until something that can start a
@@ -181,7 +194,7 @@ func (p *parser) synchronizeDecl() {
 	for p.cur().kind != kEOF {
 		if p.pos > start && depth == 0 {
 			switch p.cur().text {
-			case "func", "fn", "enum", "type", "import":
+			case "func", "fn", "enum", "type", "import", "comptime":
 				return
 			}
 		}
@@ -525,6 +538,17 @@ func (p *parser) parseFor() Stmt {
 	line := p.next().line // for
 	if p.cur().text == "{" {
 		return &ForStmt{Body: p.parseBlock(), Line: line}
+	}
+	// for x in expr { } — comptime-only iteration (§10); sema rejects it
+	// in ordinary code
+	if p.cur().kind == kIdent && p.peek().text == "in" {
+		v := p.next().text
+		p.next() // in
+		save := p.noStructLit
+		p.noStructLit = true // the body's { must not parse as a struct literal
+		x := p.parseExpr(1)
+		p.noStructLit = save
+		return &ForInStmt{Var: v, X: x, Body: p.parseBlock(), Line: line}
 	}
 	save := p.noStructLit
 	p.noStructLit = true

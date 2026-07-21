@@ -26,6 +26,8 @@ import (
 //   - maps instantiated on declaration: var m map[K]V lowers to make(...)
 //   - Result[T,E] / Option[T] from the emitted prelude, with ? try
 //   - comptime expr: constants folded at go++ compile time (§10)
+//   - comptime metaprogramming: top-level comptime blocks walk and
+//     rewrite the package's declarations before checking (§10)
 //   - directory-based packages with import "dir" (§3): the qualifier is
 //     the dependency's package name, capitalized = exported, cycles error
 //   - strict numerics: untyped literal constants, explicit conversions,
@@ -78,7 +80,7 @@ func main() {
 		fmt.Printf("compiled %s -> %s (cd %s && go run .)\n", in, outDir, outDir)
 		return
 	}
-	chk, semDiags := check(file)
+	chk, semDiags := checkImports(file, nil, nil, string(src))
 	diags.items = append(diags.items, semDiags.items...)
 	printDiags(diags, string(src))
 	goSrc := emit(file, chk)

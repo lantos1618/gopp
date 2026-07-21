@@ -24,7 +24,7 @@ func compileAndRun(t *testing.T, srcPath string) string {
 	if parseDiags.HasErrors() {
 		t.Fatalf("parse:\n%s", parseDiags)
 	}
-	chk, diags := check(file)
+	chk, diags := checkImports(file, nil, nil, string(src))
 	if diags.HasErrors() {
 		t.Fatalf("check:\n%s", diags)
 	}
@@ -119,6 +119,14 @@ func TestEndToEndImports(t *testing.T) {
 	want := "3 -2\nfourth\n0 0\nfourth\nbox 42\n"
 	if got != want {
 		t.Fatalf("imports output:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestEndToEndMeta(t *testing.T) {
+	got := compileAndRun(t, "examples/meta.gopp")
+	want := "hi gopher\nneon\nada 36\nneon\nhappy\n55\n"
+	if got != want {
+		t.Fatalf("meta.gopp output:\n got %q\nwant %q", got, want)
 	}
 }
 

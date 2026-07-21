@@ -1,0 +1,83 @@
+package main
+
+// §10 comptime metaprogramming: top-level comptime blocks walk, use, and
+// rewrite this package's own declarations BEFORE type checking runs.
+// What you mutate here is what sema and codegen see.
+
+enum Color {
+    Red
+    Green
+}
+
+type User struct {
+    Name string
+}
+
+func greet(name string) string {
+    return "hi " + name
+}
+
+comptime {
+    print("walking", len(decls()), "decls")
+    for d in decls() {
+        print(d.kind, d.name)
+        // add a parameter to an existing function
+        if d.kind == "func" && d.name == "greet" {
+            d.params.add(Param("loud", "bool"))
+        }
+        // add a variant; the match in describe must now cover it
+        if d.kind == "enum" && d.name == "Color" {
+            d.variants.add(Variant("Neon"))
+        }
+        // add fields to a struct — Color used bare, as a type handle
+        if d.kind == "struct" && d.name == "User" {
+            d.fields.add(Field("Age", "int"))
+            d.fields.add(Field("Fav", Color))
+        }
+    }
+    // generate a brand-new type into the package
+    mood := Enum("Mood")
+    mood.variants.add(Variant("Happy"))
+    mood.variants.add(Variant("Grumpy"))
+    gen(mood)
+}
+
+// an ordinary function — callable at comptime because it is declared
+func fib(n int) int {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+
+comptime {
+    // call a previously declared function at compile time, then bake the
+    // result into a generated function
+    n := fib(10)
+    print("fib(10) =", n)
+    f := Func("fib10")
+    f.results.add(Param("", "int"))
+    f.body = "return " + str(n)
+    gen(f)
+}
+
+func describe(c Color) string {
+    return match c {
+        Red -> "red"
+        Green -> "green"
+        Neon -> "neon"
+    }
+}
+
+func main() {
+    println(greet("gopher", true))
+    println(describe(Neon))
+    u := User{Name: "ada", Age: 36, Fav: Neon}
+    println(u.Name, u.Age)
+    println(describe(u.Fav))
+    m := Happy
+    match m {
+        Happy -> println("happy")
+        Grumpy -> println("grumpy")
+    }
+    println(fib10())
+}
+

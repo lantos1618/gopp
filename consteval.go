@@ -27,14 +27,20 @@ const (
 	ckBool
 	ckRune
 	ckDuration // nanosecond count, like time.Duration
+	ckList     // comptime list (§10 metaprogramming)
+	ckRecord   // comptime record — a live handle onto an AST node
+	ckVoid     // no value (comptime call to a void function)
 )
 
 type constVal struct {
 	kind constKind
-	i    *big.Int // ckInt, ckRune, ckDuration
-	f    float64  // ckFloat
-	s    string   // ckString
-	b    bool     // ckBool
+	i    *big.Int    // ckInt, ckRune, ckDuration
+	f    float64     // ckFloat
+	s    string      // ckString
+	b    bool        // ckBool
+	l    []constVal  // ckList
+	add  func(constVal) error // ckList: optional .add(...) method (live lists)
+	r    *metaRecord // ckRecord
 }
 
 func intVal(v *big.Int) constVal  { return constVal{kind: ckInt, i: v} }

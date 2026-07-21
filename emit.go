@@ -936,6 +936,9 @@ func renameStmt(s Stmt, from, to string) {
 		renameStmt(st.Body, from, to)
 	case *LoopStmt:
 		renameStmt(st.Body, from, to)
+	case *ForInStmt:
+		renameExpr(st.X, from, to)
+		renameStmt(st.Body, from, to)
 	case *ReturnStmt:
 		for _, r := range st.Results {
 			renameExpr(r, from, to)

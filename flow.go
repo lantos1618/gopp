@@ -337,6 +337,8 @@ func stmtLine(s Stmt) int {
 		return st.Line
 	case *ForStmt:
 		return st.Line
+	case *ForInStmt:
+		return st.Line
 	case *LoopStmt:
 		return st.Line
 	case *BreakStmt:

@@ -282,6 +282,7 @@ type checker struct {
 	importPaths map[string]string // qualifier -> output-relative Go import path
 	qualified   map[Expr]string   // value exprs referencing a dependency (foo.Bar) -> qualifier
 	declPkg     map[Decl]string   // foreign enum/struct decl -> owning package qualifier
+	src         string            // package source (for comptime .body text)
 }
 
 func preludeEnums() []*EnumDecl {
@@ -311,13 +312,13 @@ func exported(name string) bool {
 // collected diagnostics (§0): the caller decides whether to proceed to
 // codegen (only when diags.HasErrors() is false).
 func check(f *File) (*checker, *Diagnostics) {
-	return checkImports(f, nil, nil)
+	return checkImports(f, nil, nil, "")
 }
 
 // checkImports is check with a package context: imports maps qualifiers to
 // already-checked dependency checkers, importPaths to their Go import
-// paths for emission.
-func checkImports(f *File, imports map[string]*checker, importPaths map[string]string) (*checker, *Diagnostics) {
+// paths for emission; src is the package source (comptime .body text).
+func checkImports(f *File, imports map[string]*checker, importPaths map[string]string, src ...string) (*checker, *Diagnostics) {
 	c := &checker{
 		diag:       &Diagnostics{},
 		enums:      map[string]*EnumDecl{},
@@ -344,6 +345,13 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 	for qual, path := range importPaths {
 		c.importPaths[qual] = path
 	}
+	if len(src) > 0 {
+		c.src = src[0]
+	}
+	// §10 metaprogramming: comptime blocks run BEFORE any registration or
+	// resolution, so their mutations and gen'd declarations are exactly
+	// what the rest of the pipeline sees
+	c.evalComptimeDecls(f)
 	// register foreign decls so the emitter qualifies their references
 	for qual, dep := range c.imports {
 		for _, e := range dep.enums {
@@ -359,7 +367,6 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 		c.enums[e.Name] = e
 		c.prelude[e] = true
 	}
-	// prelude duration vars
 	c.globals.vars["ms"] = tduration
 	c.globals.vars["second"] = tduration
 	c.globals.vars["minute"] = tduration
@@ -682,6 +689,8 @@ func (c *checker) checkStmt(s Stmt) {
 		c.child()
 		c.checkStmts(st.List)
 		c.pop()
+	case *ForInStmt:
+		c.diag.errorf(st.Line, "for-in is only supported inside comptime blocks")
 	case *VarStmt:
 		ty := c.resolveType(st.Type)
 		if st.Init != nil {

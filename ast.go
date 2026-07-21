@@ -60,9 +60,19 @@ type StructDecl struct {
 	Line    int
 }
 
-func (*FuncDecl) declNode()   {}
-func (*EnumDecl) declNode()   {}
-func (*StructDecl) declNode() {}
+func (*FuncDecl) declNode()     {}
+func (*EnumDecl) declNode()     {}
+func (*StructDecl) declNode()   {}
+func (*ComptimeDecl) declNode() {}
+
+// ComptimeDecl is a top-level `comptime { ... }` block: metaprogramming
+// (§10). The block runs during sema BEFORE any type resolution, walking
+// and rewriting the package's declarations (decls(), .params.add(...),
+// gen(...)); it emits no code of its own.
+type ComptimeDecl struct {
+	Body *Block
+	Line int
+}
 
 // ---------- types ----------
 
@@ -159,6 +169,15 @@ type LoopStmt struct {
 	Line int
 }
 
+// ForInStmt is `for x in expr { }` — comptime-only iteration over a
+// comptime list (§10); outside a comptime block sema rejects it.
+type ForInStmt struct {
+	Var  string
+	X    Expr
+	Body *Block
+	Line int
+}
+
 type BreakStmt struct {
 	Label string // "" = plain break, "loop" = innermost go++ loop
 	Line  int
@@ -181,6 +200,7 @@ func (*ExprStmt) stmtNode()   {}
 func (*AssignStmt) stmtNode() {}
 func (*IfStmt) stmtNode()     {}
 func (*ForStmt) stmtNode()    {}
+func (*ForInStmt) stmtNode()  {}
 func (*LoopStmt) stmtNode()   {}
 func (*BreakStmt) stmtNode()  {}
 func (*ReturnStmt) stmtNode() {}
