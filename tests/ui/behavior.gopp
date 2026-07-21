@@ -1,0 +1,66 @@
+package main
+
+// §8 behaviors: error paths.
+
+enum Status {
+    Active
+}
+
+behavior Stringer {
+    String(self) string
+}
+
+behavior Namer {
+    Name(self) string
+}
+
+impl Stringer for Status {
+    String(self) string {
+        return "a"
+    }
+}
+
+impl Stringer for Status { //~ ERROR duplicate implementation of Stringer for Status
+    String(self) string {
+        return "b"
+    }
+}
+
+impl Namer for Status { //~ ERROR missing method Name (behavior Namer for Status)
+}
+
+impl Nosuch for Status { //~ ERROR undefined behavior Nosuch
+}
+
+impl Stringer for int { //~ ERROR impl target int is not a local enum or struct (the orphan rule)
+    String(self) string {
+        return "i"
+    }
+}
+
+behavior Extra {
+    Extra(self) string
+}
+
+impl Extra for Status {
+    Extra(self) string {
+        return "e"
+    }
+    Nope(self) string { //~ ERROR behavior Extra has no method Nope
+        return "n"
+    }
+}
+
+func Shout[T: Stringer](x T) string {
+    return x.String()
+}
+
+func Free[T](x T) string {
+    return x.String() //~ ERROR T has no method String
+}
+
+func main() {
+    println(Shout(1)) //~ ERROR int does not implement Stringer (bound of Shout's T)
+    println(Shout(Active))
+}
+

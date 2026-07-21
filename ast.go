@@ -33,11 +33,39 @@ type Field struct {
 type FuncDecl struct {
 	Name       string
 	TypeParams []string // e.g. ["T"]; empty = non-generic (§8)
+	Bounds     []string // parallel to TypeParams: behavior bound or "" (§8)
 	Params     []Field
 	Results    []Field // 0 or 1 used in practice
 	Body       *Block
 	Line       int
 	Col        int
+}
+
+// BehaviorDecl is `behavior Name { Method(self) Result ... }` — go++'s
+// trait (§8). The first parameter of every method is the receiver.
+type BehaviorDecl struct {
+	Name    string
+	Methods []BehaviorMethod
+	Line    int
+	Col     int
+}
+
+type BehaviorMethod struct {
+	Name    string
+	Params  []Field // Params[0] is the receiver
+	Results []Field
+	Line    int
+	Col     int
+}
+
+// ImplDecl is `impl Behavior for Type { Method(self) ... { body } }`.
+// Coherence: one impl per (behavior, type); one method name per type.
+type ImplDecl struct {
+	Behavior string
+	Type     TypeExpr // a local, non-generic enum or struct
+	Methods  []*FuncDecl
+	Line     int
+	Col      int
 }
 
 type EnumDecl struct {
@@ -65,6 +93,8 @@ type StructDecl struct {
 func (*FuncDecl) declNode()     {}
 func (*EnumDecl) declNode()     {}
 func (*StructDecl) declNode()   {}
+func (*BehaviorDecl) declNode() {}
+func (*ImplDecl) declNode()     {}
 func (*ComptimeDecl) declNode() {}
 
 // ComptimeDecl is a top-level `comptime { ... }` block: metaprogramming

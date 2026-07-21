@@ -961,8 +961,9 @@ func (mc *metaCtx) evalCall(ex *CallExpr, env map[string]constVal) (constVal, bo
 	case "decls":
 		var elems []constVal
 		for _, d := range mc.file.Decls {
-			if _, isComptime := d.(*ComptimeDecl); isComptime {
-				continue
+			switch d.(type) {
+			case *ComptimeDecl, *BehaviorDecl, *ImplDecl:
+				continue // behaviors/impls get handles when §8 metaprogramming lands
 			}
 			elems = append(elems, mc.wrapDecl(d))
 		}

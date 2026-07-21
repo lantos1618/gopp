@@ -1,0 +1,47 @@
+package main
+
+// §8: behaviors (traits). A behavior lowers to a Go interface, an impl
+// to receiver methods, and a bound to a Go constraint.
+
+enum Status {
+    Active
+    Inactive
+}
+
+behavior Stringer {
+    String(self) string
+}
+
+impl Stringer for Status {
+    String(self) string {
+        return match self {
+            Active -> "active"
+            Inactive -> "inactive"
+        }
+    }
+}
+
+type Celsius struct {
+    Deg int
+}
+
+impl Stringer for Celsius {
+    String(self) string {
+        return "celsius"
+    }
+}
+
+// the bound makes the method callable on the rigid type parameter
+func Shout[T: Stringer](x T) string {
+    return x.String() + "!"
+}
+
+func main() {
+    s := Active
+    println(s.String()) // method on a concrete type
+    println(s.String())
+    println(Shout(s)) // bound satisfied by inference: T = Status
+    println(Shout(Inactive))
+    println(Shout[Celsius](Celsius{Deg: 21})) // explicit instantiation
+}
+

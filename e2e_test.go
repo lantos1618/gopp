@@ -138,6 +138,14 @@ func TestEndToEndGeneric(t *testing.T) {
 	}
 }
 
+func TestEndToEndBehavior(t *testing.T) {
+	got := compileAndRun(t, "examples/behavior.gopp")
+	want := "active\nactive\nactive!\ninactive!\ncelsius!\n"
+	if got != want {
+		t.Fatalf("behavior.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
 // writePkg makes a one-file package in dir/name for loader unit tests.
 func writePkg(t *testing.T, dir, name, src string) {
 	t.Helper()

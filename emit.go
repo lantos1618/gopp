@@ -36,6 +36,10 @@ func emit(f *File, c *checker) string {
 			e.emitEnum(dd)
 		case *StructDecl:
 			e.emitStruct(dd)
+		case *BehaviorDecl:
+			e.emitBehavior(dd)
+		case *ImplDecl:
+			e.emitImpl(dd)
 		case *FuncDecl:
 			e.emitFunc(dd)
 		}
@@ -268,6 +272,55 @@ func (e *emitter) emitTry(te *TryExpr, bind func(tmp string)) {
 	bind(tmp)
 }
 
+// ---------- behaviors (§8) ----------
+
+// emitBehavior lowers a behavior to a Go interface (receiver dropped).
+func (e *emitter) emitBehavior(d *BehaviorDecl) {
+	e.s("type %s interface {\n", d.Name)
+	for _, m := range d.Methods {
+		e.s("%s%s\n", m.Name, e.sigGo(m.Params[1:], m.Results))
+	}
+	e.s("}\n\n")
+}
+
+// emitImpl lowers impl methods to Go receiver methods — exactly how Go
+// interfaces get satisfied.
+func (e *emitter) emitImpl(d *ImplDecl) {
+	tn := d.Type.(*IdentType).Name // registerImpls guaranteed this
+	for _, m := range d.Methods {
+		ft := e.c.methods[tn][m.Name]
+		if ft == nil {
+			continue
+		}
+		e.curResults = ft.results
+		recv := recvName(m)
+		e.s("func (%s %s) %s%s {\n", recv, tn, m.Name, e.sigGo(m.Params[1:], m.Results))
+		e.emitStmts(m.Body.List)
+		e.s("}\n\n")
+	}
+}
+
+// sigGo renders (params) results without the function name.
+func (e *emitter) sigGo(params, results []Field) string {
+	var ps []string
+	for _, p := range params {
+		ps = append(ps, p.Name+" "+e.typeExprGo(p.Type))
+	}
+	res := ""
+	switch len(results) {
+	case 0:
+	case 1:
+		res = " " + e.typeExprGo(results[0].Type)
+	default:
+		var rs []string
+		for _, r := range results {
+			rs = append(rs, e.typeExprGo(r.Type))
+		}
+		res = " (" + strings.Join(rs, ", ") + ")"
+	}
+	return "(" + strings.Join(ps, ", ") + ")" + res
+}
+
 // ---------- functions ----------
 
 func (e *emitter) emitFunc(fn *FuncDecl) {
@@ -278,7 +331,15 @@ func (e *emitter) emitFunc(fn *FuncDecl) {
 	}
 	tp := ""
 	if len(fn.TypeParams) > 0 { // §8: Go generics carry the instantiation
-		tp = "[" + strings.Join(fn.TypeParams, " any, ") + " any]"
+		parts := make([]string, len(fn.TypeParams))
+		for i, tpn := range fn.TypeParams {
+			constraint := "any"
+			if i < len(fn.Bounds) && fn.Bounds[i] != "" {
+				constraint = fn.Bounds[i] // a behavior IS a Go constraint
+			}
+			parts[i] = tpn + " " + constraint
+		}
+		tp = "[" + strings.Join(parts, ", ") + "]"
 	}
 	res := ""
 	switch len(fn.Results) {

@@ -87,6 +87,26 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - Emission maps to Go generics directly (`func Identity[T any](x T) T`),
   so instantiation and monomorphization are the Go toolchain's job.
 
+## Behaviors (§8)
+
+- `behavior Stringer { String(self) string }` — a trait. The first
+  parameter of every method is the receiver. A behavior lowers to a Go
+  interface.
+- `impl Stringer for Status { ... }` — receiver methods on the Go type.
+  Validation: the behavior must exist, the target must be a LOCAL
+  non-generic enum or struct (the orphan rule), one impl per
+  (behavior, type), one method name per type (Go emission makes this a
+  hard rule, not a preference), every behavior method implemented with
+  the behavior's exact signature (Self = the concrete type), no extras.
+- Method calls work on concrete types (`s.String()`) and on rigid type
+  parameters under a bound: `func Shout[T: Stringer](x T) string {
+  return x.String() + "!" }`. A bound lowers to a Go constraint.
+- Instantiation checks the bound: `Shout(1)` → "int does not implement
+  Stringer (bound of Shout's T)". Basic types never implement behaviors
+  (orphan rule again).
+- Deferred: impls on generic types, imported behaviors/types in impls,
+  default method bodies, multiple bounds per parameter.
+
 ## Generic constructor inference (§8-lite)
 
 - `var r Result[int, string] = Ok(1)`, `return Ok(1)` from a
@@ -262,9 +282,10 @@ drop order) do not apply and are deliberately deleted from the roadmap.
 
 - **§17 identifier interning** — pure performance; at ~4k LOC the win is
   unmeasurable against the churn. Revisit when compile times hurt.
-- **§8 behaviors (traits)** — generic functions landed; behaviors, impl
-  tables, and bounds (`T: Comparable`) are the remaining half. With
-  them: operator overloading (§14) and method calls on type params.
+- **§8 behaviors** — LANDED: behavior/impl/bounds, method resolution,
+  coherence. Remaining: impls on generic types, cross-package impls,
+  default bodies, multi-bounds. Operator overloading (§14) can now
+  follow.
 - **§14 operator overloading** — needs behaviors first.
 - **§16 macros** — no macro syntax; top-level comptime blocks (§10
   metaprogramming) cover the code-generation-shaped wants with live AST

@@ -166,6 +166,10 @@ func (p *parser) tryDecl() (d Decl) {
 		return p.parseEnumDecl()
 	case "type":
 		return p.parseStructDecl()
+	case "behavior":
+		return p.parseBehaviorDecl()
+	case "impl":
+		return p.parseImplDecl()
 	case "comptime":
 		return p.parseComptimeDecl()
 	case "import":
@@ -194,7 +198,7 @@ func (p *parser) synchronizeDecl() {
 	for p.cur().kind != kEOF {
 		if p.pos > start && depth == 0 {
 			switch p.cur().text {
-			case "func", "fn", "enum", "type", "import", "comptime":
+			case "func", "fn", "enum", "type", "import", "comptime", "behavior", "impl":
 				return
 			}
 		}
@@ -231,11 +235,17 @@ func (p *parser) synchronizeStmt() {
 func (p *parser) parseFuncDecl() Decl {
 	tk := p.next() // func / fn
 	name := p.expectIdent()
-	var typeParams []string
+	var typeParams, bounds []string
 	if p.cur().text == "[" { // func Identity[T](x T) T (§8)
 		p.next()
 		for {
 			typeParams = append(typeParams, p.expectIdent())
+			bound := ""
+			if p.cur().text == ":" { // T: Stringer — a behavior bound (§8)
+				p.next()
+				bound = p.expectIdent()
+			}
+			bounds = append(bounds, bound)
 			if p.cur().text == "," {
 				p.next()
 				continue
@@ -255,7 +265,65 @@ func (p *parser) parseFuncDecl() Decl {
 	}
 	p.skipNL()
 	body := p.parseBlock()
-	return &FuncDecl{Name: name, TypeParams: typeParams, Params: params, Results: results, Body: body, Line: tk.line, Col: tk.col}
+	return &FuncDecl{Name: name, TypeParams: typeParams, Bounds: bounds, Params: params, Results: results, Body: body, Line: tk.line, Col: tk.col}
+}
+
+// parseBehaviorDecl parses `behavior Name { Method(self) Result ... }`.
+func (p *parser) parseBehaviorDecl() Decl {
+	tk := p.next() // behavior
+	d := &BehaviorDecl{Name: p.expectIdent(), Line: tk.line, Col: tk.col}
+	p.expect("{")
+	for {
+		p.skipNL()
+		if p.cur().text == "}" {
+			p.next()
+			return d
+		}
+		mk := p.cur()
+		m := BehaviorMethod{Name: p.expectIdent(), Line: mk.line, Col: mk.col}
+		p.expect("(")
+		m.Params = p.parseFieldList(")")
+		if p.cur().text == "(" {
+			p.next()
+			m.Results = p.parseFieldList(")")
+		} else if p.cur().kind == kIdent || p.cur().text == "[" || p.cur().text == "*" ||
+			p.cur().text == "map" || p.cur().text == "chan" {
+			m.Results = []Field{{Type: p.parseType(), Line: p.cur().line}}
+		}
+		d.Methods = append(d.Methods, m)
+	}
+}
+
+// parseImplDecl parses `impl Behavior for Type { Method(self) ... { } }`.
+func (p *parser) parseImplDecl() Decl {
+	tk := p.next() // impl
+	d := &ImplDecl{Behavior: p.expectIdent(), Line: tk.line, Col: tk.col}
+	if p.cur().text != "for" {
+		p.errorft(p.cur(), "expected `for` after the behavior name, got %q", p.cur().text)
+	}
+	p.next()
+	d.Type = p.parseType()
+	p.expect("{")
+	for {
+		p.skipNL()
+		if p.cur().text == "}" {
+			p.next()
+			return d
+		}
+		mk := p.cur()
+		fn := &FuncDecl{Name: p.expectIdent(), Line: mk.line, Col: mk.col}
+		p.expect("(")
+		fn.Params = p.parseFieldList(")")
+		if p.cur().text == "(" {
+			p.next()
+			fn.Results = p.parseFieldList(")")
+		} else if p.cur().text != "{" && p.cur().kind != kNewline {
+			fn.Results = []Field{{Type: p.parseType(), Line: p.cur().line}}
+		}
+		p.skipNL()
+		fn.Body = p.parseBlock()
+		d.Methods = append(d.Methods, fn)
+	}
 }
 
 // parseFieldList parses `a int, b int` / `a, b int` / `int` style lists

@@ -68,6 +68,7 @@ type tFunc struct {
 	params     []Type
 	results    []Type
 	typeParams []string // §8 generic functions; empty = monomorphic
+	bounds     []string // §8: parallel to typeParams, behavior bound or ""
 }
 
 func (t *tFunc) String() string {
@@ -267,9 +268,17 @@ type checker struct {
 	globals       *scope
 	cur           *scope
 	curResults    []Type
-	curFuncLine   int      // declaration line of the function being checked (§11 notes)
-	curTypeParams []string // §8: type params of the function being checked
+	curFuncLine   int               // declaration line of the function being checked (§11 notes)
+	curTypeParams []string          // §8: type params of the function being checked
+	curBounds     map[string]string // §8: behavior bounds of those params
 	loopDepth     int
+	// §8 behaviors: decls by name; impls/methods keyed by type name.
+	// methods[Type][Method] is the resolved signature (receiver dropped);
+	// one method name per type is the coherence rule (Go emission).
+	behaviors    map[string]*BehaviorDecl
+	behaviorSigs map[string]map[string]*tFunc // behavior -> method -> sig (Self = tTypeParam)
+	impls        map[string]map[string]*ImplDecl
+	methods      map[string]map[string]*tFunc
 	// outputs for the emitter (side tables, §1)
 	types       map[Expr]Type
 	resolved    map[Expr]*ctorTarget // idents/call-funs that are variant references
@@ -322,24 +331,28 @@ func check(f *File) (*checker, *Diagnostics) {
 // paths for emission; src is the package source (comptime .body text).
 func checkImports(f *File, imports map[string]*checker, importPaths map[string]string, src ...string) (*checker, *Diagnostics) {
 	c := &checker{
-		diag:        &Diagnostics{},
-		enums:       map[string]*EnumDecl{},
-		structs:     map[string]*StructDecl{},
-		prelude:     map[*EnumDecl]bool{},
-		funcs:       map[string]*tFunc{},
-		ctors:       map[string]*ctorTarget{},
-		ambiguous:   map[string]bool{},
-		globals:     &scope{vars: map[string]Type{}},
-		types:       map[Expr]Type{},
-		resolved:    map[Expr]*ctorTarget{},
-		inferred:    map[Expr][]Type{},
-		constVals:   map[Expr]constVal{},
-		patVariant:  map[Pattern]bool{},
-		preludeVars: map[Expr]bool{},
-		imports:     map[string]*checker{},
-		importPaths: map[string]string{},
-		qualified:   map[Expr]string{},
-		declPkg:     map[Decl]string{},
+		diag:         &Diagnostics{},
+		enums:        map[string]*EnumDecl{},
+		structs:      map[string]*StructDecl{},
+		prelude:      map[*EnumDecl]bool{},
+		funcs:        map[string]*tFunc{},
+		ctors:        map[string]*ctorTarget{},
+		ambiguous:    map[string]bool{},
+		globals:      &scope{vars: map[string]Type{}},
+		types:        map[Expr]Type{},
+		resolved:     map[Expr]*ctorTarget{},
+		inferred:     map[Expr][]Type{},
+		constVals:    map[Expr]constVal{},
+		patVariant:   map[Pattern]bool{},
+		preludeVars:  map[Expr]bool{},
+		imports:      map[string]*checker{},
+		importPaths:  map[string]string{},
+		qualified:    map[Expr]string{},
+		declPkg:      map[Decl]string{},
+		behaviors:    map[string]*BehaviorDecl{},
+		behaviorSigs: map[string]map[string]*tFunc{},
+		impls:        map[string]map[string]*ImplDecl{},
+		methods:      map[string]map[string]*tFunc{},
 	}
 	for qual, dep := range imports {
 		c.imports[qual] = dep
@@ -442,6 +455,10 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			c.checkStructCycles(s, s, map[*StructDecl]bool{})
 		}
 	}
+	// §8: behaviors and impls — after types, before signatures (bounds
+	// on function type params reference behaviors)
+	c.registerBehaviors(f)
+	c.registerImpls(f)
 	// pass 1.5: function signatures (no bodies — mutual recursion works)
 	for _, d := range f.Decls {
 		if fn, ok := d.(*FuncDecl); ok {
@@ -450,12 +467,19 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 				continue
 			}
 			c.curTypeParams = fn.TypeParams // T resolves rigidly in the sig
-			ft := &tFunc{typeParams: fn.TypeParams}
+			ft := &tFunc{typeParams: fn.TypeParams, bounds: fn.Bounds}
 			for _, p := range fn.Params {
 				ft.params = append(ft.params, c.resolveType(p.Type))
 			}
 			for _, r := range fn.Results {
 				ft.results = append(ft.results, c.resolveType(r.Type))
+			}
+			for _, b := range fn.Bounds {
+				if b != "" {
+					if _, ok := c.behaviors[b]; !ok {
+						c.diag.errorf(fn.Line, "undefined behavior %s in bound", b)
+					}
+				}
 			}
 			c.curTypeParams = nil
 			c.funcs[fn.Name] = ft
@@ -472,6 +496,12 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			c.curResults = ft.results
 			c.curFuncLine = fn.Line // for "expected because of this" notes (§11)
 			c.curTypeParams = fn.TypeParams
+			c.curBounds = map[string]string{}
+			for i, tp := range fn.TypeParams {
+				if i < len(fn.Bounds) && fn.Bounds[i] != "" {
+					c.curBounds[tp] = fn.Bounds[i]
+				}
+			}
 			c.cur = &scope{parent: c.globals, vars: map[string]Type{}}
 			for i, p := range fn.Params {
 				if i < len(ft.params) {
@@ -480,11 +510,250 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			}
 			c.checkStmts(fn.Body.List)
 			c.curTypeParams = nil
+			c.curBounds = nil
+		}
+	}
+	// pass 2b: impl method bodies — receiver bound to the concrete type
+	for _, d := range f.Decls {
+		imp, ok := d.(*ImplDecl)
+		if !ok {
+			continue
+		}
+		it, _ := imp.Type.(*IdentType)
+		if it == nil || c.methods[it.Name] == nil {
+			continue // validation already reported the problem
+		}
+		var rt Type
+		if en, ok := c.enums[it.Name]; ok {
+			rt = &tEnum{decl: en}
+		} else {
+			rt = &tStruct{decl: c.structs[it.Name]}
+		}
+		for _, m := range imp.Methods {
+			ft := c.methods[it.Name][m.Name]
+			if ft == nil {
+				continue
+			}
+			c.curResults = ft.results
+			c.curFuncLine = m.Line
+			c.cur = &scope{parent: c.globals, vars: map[string]Type{}}
+			c.cur.vars[recvName(m)] = rt // the receiver
+			for i, p := range m.Params[1:] {
+				if i < len(ft.params) {
+					c.cur.vars[p.Name] = ft.params[i]
+				}
+			}
+			c.checkStmts(m.Body.List)
 		}
 	}
 	// pass 3 (§9): flow checks over the typed bodies
 	c.checkFlow(f)
 	return c, c.diag
+}
+
+// methodOf finds a method on ty (§8): impls for concrete local types,
+// behavior methods for rigid type parameters via the current bounds.
+// The returned signature excludes the receiver.
+func (c *checker) methodOf(ty Type, name string) *tFunc {
+	switch t := ty.(type) {
+	case *tEnum:
+		if ms := c.methods[t.decl.Name]; ms != nil {
+			return ms[name]
+		}
+	case *tStruct:
+		if ms := c.methods[t.decl.Name]; ms != nil {
+			return ms[name]
+		}
+	case tTypeParam:
+		bound := c.curBounds[t.name]
+		if bound == "" {
+			return nil
+		}
+		sig := c.behaviorSigs[bound][name]
+		if sig == nil {
+			return nil
+		}
+		out := &tFunc{}
+		for _, p := range sig.params {
+			out.params = append(out.params, subst(p, []string{"Self"}, []Type{t}))
+		}
+		for _, r := range sig.results {
+			out.results = append(out.results, subst(r, []string{"Self"}, []Type{t}))
+		}
+		return out
+	}
+	return nil
+}
+
+// implements reports whether ty has an impl of the behavior (§8 bounds).
+func (c *checker) implements(ty Type, behavior string) bool {
+	var tn string
+	switch t := ty.(type) {
+	case *tEnum:
+		tn = t.decl.Name
+	case *tStruct:
+		tn = t.decl.Name
+	default:
+		return false
+	}
+	return c.impls[tn][behavior] != nil
+}
+
+// registerBehaviors collects behavior declarations and resolves their
+// method signatures with Self as a rigid type parameter (§8).
+func (c *checker) registerBehaviors(f *File) {
+	for _, d := range f.Decls {
+		b, ok := d.(*BehaviorDecl)
+		if !ok {
+			continue
+		}
+		if _, dup := c.behaviors[b.Name]; dup {
+			c.diag.errorf(b.Line, "duplicate behavior %s", b.Name)
+			continue
+		}
+		c.behaviors[b.Name] = b
+		sigs := map[string]*tFunc{}
+		c.curTypeParams = []string{"Self"}
+		for _, m := range b.Methods {
+			if len(m.Params) == 0 {
+				c.diag.errorf(m.Line, "method %s needs a receiver (first parameter)", m.Name)
+				continue
+			}
+			if _, dup := sigs[m.Name]; dup {
+				c.diag.errorf(m.Line, "duplicate method %s in behavior %s", m.Name, b.Name)
+				continue
+			}
+			ft := &tFunc{}
+			for _, p := range m.Params[1:] {
+				ft.params = append(ft.params, c.resolveType(p.Type))
+			}
+			for _, r := range m.Results {
+				ft.results = append(ft.results, c.resolveType(r.Type))
+			}
+			sigs[m.Name] = ft
+		}
+		c.curTypeParams = nil
+		c.behaviorSigs[b.Name] = sigs
+	}
+}
+
+// registerImpls validates and indexes implementations (§8): the behavior
+// must exist, the target a local non-generic type, one impl per
+// (behavior, type), one method name per type, every behavior method
+// implemented with a matching signature, no extras.
+func (c *checker) registerImpls(f *File) {
+	for _, d := range f.Decls {
+		imp, ok := d.(*ImplDecl)
+		if !ok {
+			continue
+		}
+		b, bok := c.behaviors[imp.Behavior]
+		if !bok {
+			c.diag.errorf(imp.Line, "undefined behavior %s", imp.Behavior)
+			continue
+		}
+		it, ok := imp.Type.(*IdentType)
+		if !ok {
+			c.diag.errorf(imp.Line, "impl target must be a local type name")
+			continue
+		}
+		tn := it.Name
+		var rt Type
+		if en, ok := c.enums[tn]; ok {
+			if len(en.TypeParams) > 0 {
+				c.diag.errorf(imp.Line, "impls on generic types are not supported yet")
+				continue
+			}
+			rt = &tEnum{decl: en}
+		} else if st, ok := c.structs[tn]; ok {
+			rt = &tStruct{decl: st}
+		} else {
+			c.diag.errorf(imp.Line, "impl target %s is not a local enum or struct (the orphan rule)", tn)
+			continue
+		}
+		if c.impls[tn] == nil {
+			c.impls[tn] = map[string]*ImplDecl{}
+			c.methods[tn] = map[string]*tFunc{}
+		}
+		if _, dup := c.impls[tn][imp.Behavior]; dup {
+			c.diag.errorf(imp.Line, "duplicate implementation of %s for %s", imp.Behavior, tn)
+			continue
+		}
+		c.impls[tn][imp.Behavior] = imp
+		sigs := c.behaviorSigs[imp.Behavior]
+		seen := map[string]bool{}
+		for _, m := range imp.Methods {
+			if len(m.Params) == 0 {
+				c.diag.errorf(m.Line, "method %s needs a receiver (first parameter)", m.Name)
+				continue
+			}
+			if seen[m.Name] {
+				c.diag.errorf(m.Line, "duplicate method %s in impl", m.Name)
+				continue
+			}
+			seen[m.Name] = true
+			want, ok := sigs[m.Name]
+			if !ok {
+				c.diag.errorf(m.Line, "behavior %s has no method %s", imp.Behavior, m.Name)
+				continue
+			}
+			if _, clash := c.methods[tn][m.Name]; clash {
+				c.diag.errorf(m.Line, "method %s already implemented for %s", m.Name, tn)
+				continue
+			}
+			// resolve the impl's signature; it must match the behavior's
+			// with Self substituted by the concrete type
+			ft := &tFunc{}
+			for _, p := range m.Params[1:] {
+				ft.params = append(ft.params, c.resolveType(p.Type))
+			}
+			for _, r := range m.Results {
+				ft.results = append(ft.results, c.resolveType(r.Type))
+			}
+			if !c.sigMatches(ft, want, rt) {
+				c.diag.errorf(m.Line, "method %s does not match behavior %s's signature", m.Name, imp.Behavior)
+				continue
+			}
+			c.methods[tn][m.Name] = ft
+		}
+		for _, bm := range b.Methods {
+			if !seen[bm.Name] && len(bm.Params) > 0 {
+				c.diag.errorf(imp.Line, "missing method %s (behavior %s for %s)", bm.Name, imp.Behavior, tn)
+			}
+		}
+	}
+}
+
+// recvName extracts the receiver's binding name from a method's first
+// parameter (`String(self)` — self is syntactically an unnamed param).
+func recvName(m *FuncDecl) string {
+	if len(m.Params) == 0 {
+		return ""
+	}
+	if m.Params[0].Name != "" {
+		return m.Params[0].Name
+	}
+	return "self"
+}
+
+// sigMatches compares an impl method signature against the behavior's
+// with Self substituted by the concrete receiver type.
+func (c *checker) sigMatches(got, want *tFunc, self Type) bool {
+	if len(got.params) != len(want.params) || len(got.results) != len(want.results) {
+		return false
+	}
+	sub := func(t Type) Type { return subst(t, []string{"Self"}, []Type{self}) }
+	for i := range got.params {
+		if !sameType(got.params[i], sub(want.params[i])) {
+			return false
+		}
+	}
+	for i := range got.results {
+		if !sameType(got.results[i], sub(want.results[i])) {
+			return false
+		}
+	}
+	return true
 }
 
 // checkStructCycles: DFS over direct (unboxed) struct fields; a cycle
@@ -1524,6 +1793,13 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 				return tbool
 			}
 		}
+		if m := c.methodOf(xt, fun.Sel); m != nil { // §8 behavior impls
+			c.checkCallArgs(ex, m.params)
+			if len(m.results) > 0 {
+				return m.results[0]
+			}
+			return tvoid
+		}
 		c.diag.errorfAt(ex.Line, ex.Col, "%s has no method %s", xt, fun.Sel)
 		return terr
 	}
@@ -1666,6 +1942,15 @@ func (c *checker) callGenericFunc(ex *CallExpr, name string, ft *tFunc, targs []
 	} else if len(targs) != n { // arity (§5)
 		c.diag.errorfAt(ex.Line, ex.Col, "%s takes %d type argument(s), got %d", name, n, len(targs))
 		return terr
+	}
+	// bounds (§8): every solved type argument must implement its behavior
+	for i, tp := range ft.typeParams {
+		if i < len(ft.bounds) && ft.bounds[i] != "" && !isErr(targs[i]) {
+			if !c.implements(targs[i], ft.bounds[i]) {
+				c.diag.errorfAt(ex.Line, ex.Col, "%s does not implement %s (bound of %s's %s)",
+					targs[i], ft.bounds[i], name, tp)
+			}
+		}
 	}
 	for i, p := range ft.params {
 		pt := subst(p, ft.typeParams, targs)
@@ -1916,6 +2201,9 @@ func (c *checker) checkSelector(ex *SelectorExpr) Type {
 		if ex.Sel == "IsOk" || ex.Sel == "IsErr" {
 			return &tFunc{results: []Type{tbool}}
 		}
+	}
+	if m := c.methodOf(xt, ex.Sel); m != nil { // §8 method value
+		return m
 	}
 	c.diag.errorfAt(ex.Line, ex.Col, "%s has no field or method %s", xt, ex.Sel)
 	return terr

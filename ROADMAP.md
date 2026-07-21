@@ -12,9 +12,9 @@ feature; documented in SPEC.md) · ❌ not done
 | 2 | stable index-based IDs | ⚠️ side tables keyed by AST pointers, not integer IDs |
 | 3 | two-phase collection, forward refs, mutual recursion | ✅ |
 | 4 | infinite-size type cycle detection | ✅ structs, deterministic DFS |
-| 5 | coherence + orphan rules | ➖ no behaviors/impls |
+| 5 | coherence + orphan rules | ✅ one impl per (behavior,type), one method name per type, local-only targets |
 | 6 | module tree + lexical scope stack | ✅ directory packages, merged namespaces, scope stack |
-| 7 | namespaces (Type/Value/Behavior) | ⚠️ Type+Value; no Behavior namespace |
+| 7 | namespaces (Type/Value/Behavior) | ✅ behaviors registered in their own table |
 | 8 | multi-segment paths, per-hop visibility | ⚠️ two-segment `pkg.Name`, exported rule per hop; no deeper paths |
 | 9 | import fixpoint | ✅ recursive loader + memo; cycles error, no fixpoint needed (imports resolve before sema) |
 | 10 | shadowing policy enforcement point | ✅ same-scope `:=` = error, cross-scope allowed; locals shadow qualifiers |
@@ -24,9 +24,9 @@ feature; documented in SPEC.md) · ❌ not done
 | 14 | kind/arity checking | ✅ |
 | 15 | bidirectional check/infer, literal defaulting, blame boundaries | ✅ + untyped constants w/ overflow checks, explicit conversions |
 | 16 | unification: occurs, fuel, invariance, no implicit conv | ⚠️ no-implicit-conv ✅; ctor inference is §8-lite pattern matching, no engine (by design) |
-| 17 | generics checked once against bounds | ⚠️ generic functions ✅ (rigid params, call-site inference); bounds need behaviors |
-| 18 | behavior resolution, deferred obligations | ➖ no behaviors |
-| 19 | method lookup order + ambiguity | ⚠️ hardcoded methods (chan, Result); variant ambiguity ✅ |
+| 17 | generics checked once against bounds | ✅ rigid params + behavior bounds, checked once; call sites verify impls |
+| 18 | behavior resolution, deferred obligations | ⚠️ resolution + bounds ✅; no deferral loop (no inference vars) |
+| 19 | method lookup order + ambiguity | ⚠️ fields > hardcoded (chan, Result) > behavior impls; coherence kills ambiguity |
 | 20 | closure capture analysis | ➖ no closures |
 | 21 | monomorphization set collection | ➖ emitter generates generic Go |
 | 22 | value-restriction sidestep | ➖ no local generalization at all |
@@ -37,7 +37,7 @@ feature; documented in SPEC.md) · ❌ not done
 | 27 | diagnostics: spans, secondary labels, suggestions | ✅ snippets+carets on exprs/stmts/patterns/types, notes (return blame, redecl), did-you-mean; decl-level errors stay line-only |
 | 28 | test harness `//~ ERROR`, snapshots, fuzzing | ✅ annotations both directions + fuzz |
 
-**Score: 14 full ✅ · 9 partial ⚠️ · 5 N/A by language scope · 0 unaddressed**
+**Score: 17 full ✅ · 8 partial ⚠️ · 3 N/A by language scope · 0 unaddressed**
 
 Language-level wins beyond the skeleton (the "better types" program):
 removals of `error` / `any` / `<-` / nil maps · untyped literals with
@@ -72,9 +72,8 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
    ~~comptime metaprogramming (§10)~~ ✅ · ~~sema columns (§11)~~ ✅ ·
    ~~LSP v1 (§28)~~ ✅ · ~~CI/README/`gopp run`~~ ✅ ·
    ~~comptime match + string builtins~~ ✅
-2. **§8 behaviors (traits)** — the remaining flagship half: behavior
-   decls, impl tables, bounds on type params (`T: Comparable`),
-   method-call resolution. Unlocks §14 operator overloading.
+2. **§14 operator overloading** — behaviors exist; desugar operators to
+   behavior calls, built-in impls for numerics as intrinsics.
 3. **§17 interning + §1 integer IDs** — when compile times or LSP make
    them pay; both are wrappers, not rewrites, by design.
 4. **LSP v2** — import-aware analysis, local-var definitions, column
@@ -82,4 +81,4 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
 
 Cancelled: `@derive` (superseded by the better-types program — the
 language fixes the types instead of generating boilerplate over weak
-ones). Behaviors stay deferred per SPEC.md until step 2 lands.
+ones). §8 landed (generic functions + behaviors); §14 is next.
