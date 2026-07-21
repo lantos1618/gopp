@@ -1,0 +1,35 @@
+package main
+
+// §3: directory-based packages. import "geom" loads ./geom; the
+// qualifier is the dependency's package name; capitalized = exported.
+import "geom"
+
+func describe(q geom.Quadrant) string {
+    return match q {
+        First -> "first"
+        Second -> "second"
+        Third -> "third"
+        Fourth -> "fourth"
+        Origin -> "origin"
+    }
+}
+
+func main() {
+    // qualified function call + field access on a foreign struct
+    p := geom.NewPoint(3, -2)
+    println(p.X, p.Y)
+    println(describe(geom.Locate(p)))
+
+    // qualified type in a declaration + qualified unit variant value
+    var o geom.Point
+    println(o.X, o.Y)
+    f := geom.Fourth
+    println(describe(f))
+
+    // qualified generic constructor + match on a foreign enum
+    b := geom.Box[int](41)
+    match b {
+        Box(v) -> println("box", v + 1)
+    }
+}
+

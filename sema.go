@@ -275,6 +275,13 @@ type checker struct {
 	constVals  map[Expr]constVal    // comptime exprs -> compile-time values (§10)
 	patVariant map[Pattern]bool     // IdentPat that matches a unit variant (not a binding)
 	cycleDone  map[*StructDecl]bool // structs already reported on an infinite-size cycle
+	preludeVars map[Expr]bool       // idents bound in the prelude (ms, second, minute)
+	// §3 imports: qualifier -> dependency checker (checked before the
+	// importer, so its funcs/ctors/enums tables are complete)
+	imports     map[string]*checker
+	importPaths map[string]string // qualifier -> output-relative Go import path
+	qualified   map[Expr]string   // value exprs referencing a dependency (foo.Bar) -> qualifier
+	declPkg     map[Decl]string   // foreign enum/struct decl -> owning package qualifier
 }
 
 func preludeEnums() []*EnumDecl {
@@ -289,10 +296,28 @@ func preludeEnums() []*EnumDecl {
 	return []*EnumDecl{result, option}
 }
 
+// sharedPrelude is the ONE pair of synthetic Result/Option declarations
+// every checker shares (§3): Result values crossing package boundaries
+// must keep type identity at the sema level too, not just in emitted Go.
+var sharedPrelude = preludeEnums()
+
+// exported reports whether a name is visible outside its package (§3:
+// capitalized = exported, Go's rule).
+func exported(name string) bool {
+	return name != "" && name[0] >= 'A' && name[0] <= 'Z'
+}
+
 // check runs semantic analysis and ALWAYS returns partial results plus the
 // collected diagnostics (§0): the caller decides whether to proceed to
 // codegen (only when diags.HasErrors() is false).
 func check(f *File) (*checker, *Diagnostics) {
+	return checkImports(f, nil, nil)
+}
+
+// checkImports is check with a package context: imports maps qualifiers to
+// already-checked dependency checkers, importPaths to their Go import
+// paths for emission.
+func checkImports(f *File, imports map[string]*checker, importPaths map[string]string) (*checker, *Diagnostics) {
 	c := &checker{
 		diag:       &Diagnostics{},
 		enums:      map[string]*EnumDecl{},
@@ -307,8 +332,30 @@ func check(f *File) (*checker, *Diagnostics) {
 		inferred:   map[Expr][]Type{},
 		constVals:  map[Expr]constVal{},
 		patVariant: map[Pattern]bool{},
+		preludeVars: map[Expr]bool{},
+		imports:     map[string]*checker{},
+		importPaths: map[string]string{},
+		qualified:   map[Expr]string{},
+		declPkg:     map[Decl]string{},
 	}
-	for _, e := range preludeEnums() {
+	for qual, dep := range imports {
+		c.imports[qual] = dep
+	}
+	for qual, path := range importPaths {
+		c.importPaths[qual] = path
+	}
+	// register foreign decls so the emitter qualifies their references
+	for qual, dep := range c.imports {
+		for _, e := range dep.enums {
+			if !dep.prelude[e] {
+				c.declPkg[e] = qual
+			}
+		}
+		for _, s := range dep.structs {
+			c.declPkg[s] = qual
+		}
+	}
+	for _, e := range sharedPrelude {
 		c.enums[e.Name] = e
 		c.prelude[e] = true
 	}
@@ -439,7 +486,9 @@ func (c *checker) checkStructCycles(root, cur *StructDecl, visiting map[*StructD
 	visiting[cur] = true
 	defer delete(visiting, cur)
 	for _, f := range cur.Fields {
-		if st, ok := c.resolveType(f.Type).(*tStruct); ok {
+		if st, ok := c.resolveType(f.Type).(*tStruct); ok && c.declPkg[st.decl] == "" {
+			// cycles can't cross packages (imports are acyclic, §3),
+			// so foreign structs are never re-entered here
 			c.checkStructCycles(root, st.decl, visiting)
 		}
 	}
@@ -466,6 +515,9 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 				}
 			}
 		}
+		if dot := strings.IndexByte(t.Name, '.'); dot > 0 { // pkg.Type (§3)
+			return c.resolveQualifiedType(t.Name[:dot], t.Name[dot+1:], nil, t.Line)
+		}
 		if basicTypes[t.Name] {
 			return tBasic{t.Name}
 		}
@@ -487,6 +539,13 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 			c.diag.errorf(t.Line, "invalid generic type")
 			return terr
 		}
+		var args []Type
+		for _, a := range t.Args {
+			args = append(args, c.resolveTypeIn(a, inEnum))
+		}
+		if dot := strings.IndexByte(base.Name, '.'); dot > 0 { // pkg.Box[T] (§3)
+			return c.resolveQualifiedType(base.Name[:dot], base.Name[dot+1:], args, t.Line)
+		}
 		e, ok := c.enums[base.Name]
 		if !ok {
 			c.diag.errorf(t.Line, "%s is not a generic enum", base.Name)
@@ -495,10 +554,6 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 		if len(e.TypeParams) != len(t.Args) { // arity check (§5)
 			c.diag.errorf(t.Line, "%s takes %d type argument(s), got %d", base.Name, len(e.TypeParams), len(t.Args))
 			return terr
-		}
-		var args []Type
-		for _, a := range t.Args {
-			args = append(args, c.resolveTypeIn(a, inEnum))
 		}
 		return &tEnum{decl: e, args: args}
 	case *MapType:
@@ -514,12 +569,60 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 	return terr
 }
 
+// resolveQualifiedType resolves pkg.Name (and pkg.Name[args]) against an
+// imported package's type namespace (§3). Only exported, non-prelude
+// types are visible.
+func (c *checker) resolveQualifiedType(pkg, name string, args []Type, line int) Type {
+	dep, ok := c.imports[pkg]
+	if !ok {
+		c.diag.errorf(line, "undefined package %s", pkg)
+		return terr
+	}
+	if !exported(name) {
+		c.diag.errorf(line, "%s.%s is not exported", pkg, name)
+		return terr
+	}
+	if e, ok := dep.enums[name]; ok && !dep.prelude[e] {
+		if len(e.TypeParams) != len(args) { // arity (§5), covers bare pkg.Generic too
+			c.diag.errorf(line, "%s.%s takes %d type argument(s), got %d", pkg, name, len(e.TypeParams), len(args))
+			return terr
+		}
+		return &tEnum{decl: e, args: args}
+	}
+	if s, ok := dep.structs[name]; ok {
+		if len(args) > 0 {
+			c.diag.errorf(line, "%s.%s is not generic", pkg, name)
+			return terr
+		}
+		return &tStruct{decl: s}
+	}
+	c.diag.errorf(line, "undefined type %s.%s", pkg, name)
+	return terr
+}
+
+// packageOf reports whether id names an imported package — only when no
+// local binding shadows the qualifier (§3: locals win, like Go).
+func (c *checker) packageOf(id *Ident) (*checker, bool) {
+	if _, shadowed := c.cur.lookup(id.Name); shadowed {
+		return nil, false
+	}
+	dep, ok := c.imports[id.Name]
+	return dep, ok
+}
+
 // exprToType converts a parsed expression back into a type expression,
 // for generic instantiations like Ok[int, string].
 func exprToType(e Expr) TypeExpr {
 	switch ex := e.(type) {
 	case *Ident:
 		return &IdentType{Name: ex.Name, Line: ex.Line}
+	case *SelectorExpr:
+		// pkg.Type as a type argument: parser flattens these in parseType,
+		// but they also arrive via expression parsing (foo.Box[int](...))
+		if id, ok := ex.X.(*Ident); ok {
+			return &IdentType{Name: id.Name + "." + ex.Sel, Line: ex.Line}
+		}
+		return nil
 	case *IndexExpr:
 		base := exprToType(ex.X)
 		if base == nil {
@@ -1140,6 +1243,17 @@ func arithType(x, y Type) Type {
 
 func (c *checker) checkIdentValue(ex *Ident) Type {
 	if t, ok := c.cur.lookup(ex.Name); ok {
+		// prelude vars (ms/second/minute) live in the globals scope; the
+		// emitter qualifies them as gopp.Ms etc. since user code lands in
+		// its own package now
+		for s := c.cur; s != nil; s = s.parent {
+			if _, ok := s.vars[ex.Name]; ok {
+				if s == c.globals {
+					c.preludeVars[ex] = true
+				}
+				break
+			}
+		}
 		return t
 	}
 	switch ex.Name {
@@ -1169,6 +1283,10 @@ func (c *checker) checkIdentValue(ex *Ident) Type {
 			ft.params = append(ft.params, c.resolveTypeIn(f.Type, ct.enum))
 		}
 		return ft
+	}
+	if _, isPkg := c.imports[ex.Name]; isPkg {
+		c.diag.errorf(ex.Line, "package %s is not a value", ex.Name)
+		return terr
 	}
 	d := c.diag.errorfAt(ex.Line, 0, "undefined: %s", ex.Name)
 	if sug := c.suggestName(ex.Name); sug != "" {
@@ -1281,7 +1399,7 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 			return tvoid
 		}
 		if ct, ok := c.ctors[fun.Name]; ok {
-			return c.callVariantCtor(ex, fun, ct, nil, want)
+			return c.callVariantCtor(ex, fun, fun.Name, c, ct, nil, want)
 		}
 		c.diag.errorf(ex.Line, "undefined function: %s", fun.Name)
 		for _, a := range ex.Args {
@@ -1292,26 +1410,41 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 		// generic constructor instantiation: Ok[int, string](v)
 		if id, ok := fun.X.(*Ident); ok {
 			if ct, ok := c.ctors[id.Name]; ok {
-				var args []Type
-				bad := false
-				for _, te := range fun.Index {
-					tt := exprToType(te)
-					if tt == nil {
-						c.diag.errorf(ex.Line, "invalid type argument")
-						bad = true
-						continue
-					}
-					args = append(args, c.resolveType(tt))
-				}
-				if bad {
+				args := c.resolveTypeArgs(ex, fun)
+				if args == nil {
 					return terr
 				}
-				return c.callVariantCtor(ex, id, ct, args, want)
+				return c.callVariantCtor(ex, id, id.Name, c, ct, args, want)
+			}
+		}
+		// qualified generic constructor: foo.Box[int](v) (§3)
+		if sel, ok := fun.X.(*SelectorExpr); ok {
+			if id, ok2 := sel.X.(*Ident); ok2 {
+				if dep, isPkg := c.packageOf(id); isPkg {
+					if !exported(sel.Sel) {
+						c.diag.errorf(ex.Line, "%s is not exported from package %s", sel.Sel, id.Name)
+						return terr
+					}
+					if ct, ok := dep.ctors[sel.Sel]; ok && !dep.prelude[ct.enum] {
+						args := c.resolveTypeArgs(ex, fun)
+						if args == nil {
+							return terr
+						}
+						return c.callVariantCtor(ex, sel, sel.Sel, dep, ct, args, want)
+					}
+					c.diag.errorf(ex.Line, "undefined: %s.%s", id.Name, sel.Sel)
+					return terr
+				}
 			}
 		}
 		c.diag.errorf(ex.Line, "not a generic constructor call")
 		return terr
 	case *SelectorExpr:
+		if id, ok := fun.X.(*Ident); ok {
+			if dep, isPkg := c.packageOf(id); isPkg {
+				return c.checkQualifiedCall(ex, fun, id, dep, want)
+			}
+		}
 		xt := c.checkExpr(fun.X)
 		if isErr(xt) {
 			return terr
@@ -1360,13 +1493,59 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 	return terr
 }
 
-func (c *checker) callVariantCtor(ex *CallExpr, id *Ident, ct *ctorTarget, args []Type, want Type) Type {
-	if c.ambiguous[id.Name] {
-		c.diag.errorf(ex.Line, "variant name %s is ambiguous (multiple enums)", id.Name)
+// resolveTypeArgs resolves the explicit type arguments of a generic
+// constructor instantiation; nil means diagnostics were recorded.
+func (c *checker) resolveTypeArgs(ex *CallExpr, fun *IndexExpr) []Type {
+	var args []Type
+	bad := false
+	for _, te := range fun.Index {
+		tt := exprToType(te)
+		if tt == nil {
+			c.diag.errorf(ex.Line, "invalid type argument")
+			bad = true
+			continue
+		}
+		args = append(args, c.resolveType(tt))
+	}
+	if bad {
+		return nil
+	}
+	return args
+}
+
+// checkQualifiedCall checks pkg.Name(args) (§3): an exported function or
+// variant constructor of an imported package.
+func (c *checker) checkQualifiedCall(ex *CallExpr, fun *SelectorExpr, id *Ident, dep *checker, want Type) Type {
+	name := fun.Sel
+	if !exported(name) {
+		c.diag.errorf(ex.Line, "%s is not exported from package %s", name, id.Name)
+		return terr
+	}
+	if ft, ok := dep.funcs[name]; ok {
+		c.qualified[fun] = id.Name
+		c.checkCallArgs(ex, ft.params)
+		if len(ft.results) > 0 {
+			return ft.results[0]
+		}
+		return tvoid
+	}
+	if ct, ok := dep.ctors[name]; ok && !dep.prelude[ct.enum] {
+		return c.callVariantCtor(ex, fun, name, dep, ct, nil, want)
+	}
+	c.diag.errorf(ex.Line, "undefined: %s.%s", id.Name, name)
+	for _, a := range ex.Args {
+		c.checkExpr(a)
+	}
+	return terr
+}
+
+func (c *checker) callVariantCtor(ex *CallExpr, key Expr, name string, own *checker, ct *ctorTarget, args []Type, want Type) Type {
+	if own.ambiguous[name] {
+		c.diag.errorf(ex.Line, "variant name %s is ambiguous (multiple enums)", name)
 		return terr
 	}
 	if len(ex.Args) != len(ct.variant.Fields) {
-		c.diag.errorf(ex.Line, "%s takes %d value(s), got %d", id.Name, len(ct.variant.Fields), len(ex.Args))
+		c.diag.errorf(ex.Line, "%s takes %d value(s), got %d", name, len(ct.variant.Fields), len(ex.Args))
 		return terr
 	}
 	inferred := false
@@ -1374,22 +1553,22 @@ func (c *checker) callVariantCtor(ex *CallExpr, id *Ident, ct *ctorTarget, args 
 		if args == nil {
 			// §8-lite: solve type arguments from the expected type and
 			// the value arguments — pattern matching, not unification
-			args = c.inferTypeArgs(ex, id, ct, want)
+			args = c.inferTypeArgs(ex, name, own, ct, want)
 			if args == nil {
 				return terr
 			}
 			inferred = true
 		} else if len(args) != len(ct.enum.TypeParams) { // arity (§5)
-			c.diag.errorf(ex.Line, "%s takes %d type argument(s), got %d", id.Name, len(ct.enum.TypeParams), len(args))
+			c.diag.errorf(ex.Line, "%s takes %d type argument(s), got %d", name, len(ct.enum.TypeParams), len(args))
 			return terr
 		}
 	} else if args != nil {
-		c.diag.errorf(ex.Line, "%s is not generic", id.Name)
+		c.diag.errorf(ex.Line, "%s is not generic", name)
 		return terr
 	}
 	et := &tEnum{decl: ct.enum, args: args}
 	for i, f := range ct.variant.Fields {
-		ft := c.resolveTypeIn(f.Type, ct.enum)
+		ft := own.resolveTypeIn(f.Type, ct.enum)
 		if args != nil {
 			ft = subst(ft, ct.enum.TypeParams, args)
 		}
@@ -1404,9 +1583,9 @@ func (c *checker) callVariantCtor(ex *CallExpr, id *Ident, ct *ctorTarget, args 
 			c.checkAgainst(ex.Args[i], ft, ex.Line)
 		}
 	}
-	c.resolved[id] = ct
+	c.resolved[key] = ct
 	if inferred {
-		c.inferred[id] = args
+		c.inferred[key] = args
 	}
 	return et
 }
@@ -1415,7 +1594,8 @@ func (c *checker) callVariantCtor(ex *CallExpr, id *Ident, ct *ctorTarget, args 
 // unification engine: the expected type seeds the solution, then each
 // value argument's inferred type is pattern-matched against the variant's
 // field types. Anything left unsolved is one clear error, not a cascade.
-func (c *checker) inferTypeArgs(ex *CallExpr, id *Ident, ct *ctorTarget, want Type) []Type {
+// own is the checker that owns the enum (differs for imported ctors, §3).
+func (c *checker) inferTypeArgs(ex *CallExpr, name string, own *checker, ct *ctorTarget, want Type) []Type {
 	n := len(ct.enum.TypeParams)
 	solved := make([]Type, n)
 	// context pins what it can: var r Result[int, string] = Ok(...)
@@ -1427,13 +1607,13 @@ func (c *checker) inferTypeArgs(ex *CallExpr, id *Ident, ct *ctorTarget, want Ty
 		if isErr(at) {
 			continue
 		}
-		ft := c.resolveTypeIn(f.Type, ct.enum)
+		ft := own.resolveTypeIn(f.Type, ct.enum)
 		c.matchTypePattern(ft, at, ct.enum.TypeParams, solved, ex.Line)
 	}
 	for i := range solved {
 		if solved[i] == nil {
 			c.diag.errorf(ex.Line, "cannot infer type argument %s for %s; use explicit %s[%s](...)",
-				ct.enum.TypeParams[i], id.Name, id.Name, strings.Join(ct.enum.TypeParams, ", "))
+				ct.enum.TypeParams[i], name, name, strings.Join(ct.enum.TypeParams, ", "))
 			return nil
 		}
 		solved[i] = defaultType(solved[i])
@@ -1583,7 +1763,7 @@ func (c *checker) checkStructLit(ex *StructLitExpr) Type {
 				c.checkExpr(fv.Value)
 				continue
 			}
-			c.checkAgainst(fv.Value, c.resolveType(d.Fields[positional].Type), fv.Line)
+			c.checkAgainst(fv.Value, c.resolveFieldType(d, d.Fields[positional].Type), fv.Line)
 			positional++
 			continue
 		}
@@ -1601,7 +1781,7 @@ func (c *checker) checkStructLit(ex *StructLitExpr) Type {
 			c.diag.errorf(fv.Line, "duplicate field %s in literal", fv.Name)
 		}
 		seen[fv.Name] = true
-		c.checkAgainst(fv.Value, c.resolveType(f.Type), fv.Line)
+		c.checkAgainst(fv.Value, c.resolveFieldType(d, f.Type), fv.Line)
 	}
 	if !mixed && positional > 0 && positional != len(d.Fields) {
 		c.diag.errorf(ex.Line, "too few values in %s literal: %d of %d fields", d.Name, positional, len(d.Fields))
@@ -1609,7 +1789,22 @@ func (c *checker) checkStructLit(ex *StructLitExpr) Type {
 	return st
 }
 
+// resolveFieldType resolves a struct/enum field type using the checker
+// that owns the declaration — its TypeExpr may name sibling types that
+// only the owning package's namespace knows (§3).
+func (c *checker) resolveFieldType(d Decl, te TypeExpr) Type {
+	if q := c.declPkg[d]; q != "" {
+		return c.imports[q].resolveType(te)
+	}
+	return c.resolveType(te)
+}
+
 func (c *checker) checkSelector(ex *SelectorExpr) Type {
+	if id, ok := ex.X.(*Ident); ok {
+		if dep, isPkg := c.packageOf(id); isPkg {
+			return c.checkQualifiedValue(ex, id, dep)
+		}
+	}
 	xt := c.checkExpr(ex.X)
 	if isErr(xt) {
 		return terr
@@ -1620,7 +1815,7 @@ func (c *checker) checkSelector(ex *SelectorExpr) Type {
 			c.diag.errorf(ex.Line, "%s has no field %s", xt, ex.Sel)
 			return terr
 		}
-		return c.resolveType(f.Type)
+		return c.resolveFieldType(st.decl, f.Type)
 	}
 	if en, ok := xt.(*tEnum); ok && en.decl.Name == "Result" {
 		if ex.Sel == "IsOk" || ex.Sel == "IsErr" {
@@ -1628,6 +1823,42 @@ func (c *checker) checkSelector(ex *SelectorExpr) Type {
 		}
 	}
 	c.diag.errorf(ex.Line, "%s has no field or method %s", xt, ex.Sel)
+	return terr
+}
+
+// checkQualifiedValue checks pkg.Name in value position (§3): an exported
+// function, a unit variant value, or a constructor function value.
+func (c *checker) checkQualifiedValue(ex *SelectorExpr, id *Ident, dep *checker) Type {
+	name := ex.Sel
+	if !exported(name) {
+		c.diag.errorf(ex.Line, "%s is not exported from package %s", name, id.Name)
+		return terr
+	}
+	if ft, ok := dep.funcs[name]; ok {
+		c.qualified[ex] = id.Name
+		return ft
+	}
+	if ct, ok := dep.ctors[name]; ok && !dep.prelude[ct.enum] {
+		if dep.ambiguous[name] {
+			c.diag.errorf(ex.Line, "variant name %s.%s is ambiguous (multiple enums)", id.Name, name)
+			return terr
+		}
+		if len(ct.enum.TypeParams) > 0 {
+			c.diag.errorf(ex.Line, "%s.%s is generic; use explicit type arguments like %s.%s[..](...)", id.Name, name, id.Name, name)
+			return terr
+		}
+		c.resolved[ex] = ct
+		et := &tEnum{decl: ct.enum}
+		if len(ct.variant.Fields) == 0 {
+			return et // unit variant value
+		}
+		ft := &tFunc{results: []Type{et}}
+		for _, f := range ct.variant.Fields {
+			ft.params = append(ft.params, dep.resolveTypeIn(f.Type, ct.enum))
+		}
+		return ft
+	}
+	c.diag.errorf(ex.Line, "undefined: %s.%s", id.Name, name)
 	return terr
 }
 
@@ -1682,7 +1913,13 @@ func (c *checker) checkMatchWant(ex *MatchExpr, want Type) Type {
 }
 
 func (c *checker) fieldType(en *tEnum, v *Variant, k int) Type {
-	ft := c.resolveTypeIn(v.Fields[k].Type, en.decl)
+	// the owning package resolves the field pattern (§3): foreign enum
+	// fields may name types only its own namespace knows
+	own := c
+	if q := c.declPkg[en.decl]; q != "" {
+		own = c.imports[q]
+	}
+	ft := own.resolveTypeIn(v.Fields[k].Type, en.decl)
 	if len(en.args) > 0 {
 		ft = subst(ft, en.decl.TypeParams, en.args)
 	}

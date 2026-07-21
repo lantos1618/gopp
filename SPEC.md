@@ -97,6 +97,27 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   constructors live in a global constructor index — two enums exporting
   the same variant name make that name ambiguous and unusable unqualified.
 
+## Packages & imports (§3)
+
+- A package is a directory of `.gopp` files sharing one package clause
+  and one namespace. Files merge in sorted order; diagnostics stay
+  accurate via lexer line offsets against the concatenated source.
+- `import "foo"` (or `"a/b"`, `".."` — relative directories only) loads
+  that directory as a package. Imports come before declarations.
+- The qualifier is the dependency's **package name** (Go's rule), not
+  the path; two imports resolving to the same package name are an error
+  (no aliases).
+- Capitalized = exported; unexported names are invisible across packages.
+- A local binding shadows a package qualifier (locals win, like Go).
+- Import cycles are errors (`import cycle: a -> b -> a`); every package
+  must live inside the root package's directory tree.
+- Qualified use: `foo.Bar(...)`, `foo.Bar` (function value), `foo.Active`
+  (unit variant), `foo.Failed("x")` (constructor), `foo.Box[int](v)`
+  (generic constructor), `foo.Status` / `foo.Box[int]` (types).
+- The prelude (`Result`, `Option`, `ms`/`second`/`minute`) is one shared
+  package at both sema and Go level, so values crossing package
+  boundaries keep type identity.
+
 ## Match (§9)
 
 - Exhaustiveness: a match on an enum must cover every variant or have an

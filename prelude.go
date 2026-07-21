@@ -1,77 +1,78 @@
 package main
 
-// prelude is the runtime support source emitted alongside every transpiled
-// go++ program (as gopp_prelude.go). It provides the stdlib enums
-// (Result, Option), duration shorthands, and the timer helper used by
-// after() match arms. The transpiler hardcodes matching knowledge of the
-// tag/field layout below in newTr().
-const prelude = `package main
+// prelude is the runtime support source emitted as the shared package
+// "gopp" (outdir/gopp/gopp.go) for every transpiled go++ program. It
+// provides the stdlib enums (Result, Option), duration shorthands, and
+// the timer helper used by after() match arms. Everything cross-package
+// is exported; the tag/field layout below is hardcoded in emit.go
+// (tagConst, fieldGo, the try desugar).
+const prelude = `package gopp
 
 import "time"
 
 // duration shorthands so "16 * ms" style code works
-var ms = time.Millisecond
-var second = time.Second
-var minute = time.Minute
+var Ms = time.Millisecond
+var Second = time.Second
+var Minute = time.Minute
 
-func goppAfter(d time.Duration) <-chan time.Time { return time.After(d) }
+func GoppAfter(d time.Duration) <-chan time.Time { return time.After(d) }
 
 // Result[T, E] — the go++ replacement for (T, error) returns.
 
-type __gopp_tag_Result int
+type gopp_tag_Result int
 
 const (
-	__gopp_tag_Result_Ok __gopp_tag_Result = iota
-	__gopp_tag_Result_Err
+	Gopp_Tag_Result_Ok gopp_tag_Result = iota
+	Gopp_Tag_Result_Err
 )
 
 type Result[T any, E any] struct {
-	__gopp_tag     __gopp_tag_Result
-	__gopp_F_Ok_v0  T
-	__gopp_F_Err_v0 E
+	Gopp_Tag     gopp_tag_Result
+	Gopp_F_Ok_v0  T
+	Gopp_F_Err_v0 E
 }
 
 func Ok[T, E any](v T) Result[T, E] {
 	var z Result[T, E]
-	z.__gopp_tag = __gopp_tag_Result_Ok
-	z.__gopp_F_Ok_v0 = v
+	z.Gopp_Tag = Gopp_Tag_Result_Ok
+	z.Gopp_F_Ok_v0 = v
 	return z
 }
 
 func Err[T, E any](e E) Result[T, E] {
 	var z Result[T, E]
-	z.__gopp_tag = __gopp_tag_Result_Err
-	z.__gopp_F_Err_v0 = e
+	z.Gopp_Tag = Gopp_Tag_Result_Err
+	z.Gopp_F_Err_v0 = e
 	return z
 }
 
-func (r Result[T, E]) IsOk() bool  { return r.__gopp_tag == __gopp_tag_Result_Ok }
-func (r Result[T, E]) IsErr() bool { return r.__gopp_tag == __gopp_tag_Result_Err }
+func (r Result[T, E]) IsOk() bool  { return r.Gopp_Tag == Gopp_Tag_Result_Ok }
+func (r Result[T, E]) IsErr() bool { return r.Gopp_Tag == Gopp_Tag_Result_Err }
 
 // Option[T] — the go++ replacement for nil pointers.
 
-type __gopp_tag_Option int
+type gopp_tag_Option int
 
 const (
-	__gopp_tag_Option_Some __gopp_tag_Option = iota
-	__gopp_tag_Option_None
+	Gopp_Tag_Option_Some gopp_tag_Option = iota
+	Gopp_Tag_Option_None
 )
 
 type Option[T any] struct {
-	__gopp_tag      __gopp_tag_Option
-	__gopp_F_Some_v0 T
+	Gopp_Tag      gopp_tag_Option
+	Gopp_F_Some_v0 T
 }
 
 func Some[T any](v T) Option[T] {
 	var z Option[T]
-	z.__gopp_tag = __gopp_tag_Option_Some
-	z.__gopp_F_Some_v0 = v
+	z.Gopp_Tag = Gopp_Tag_Option_Some
+	z.Gopp_F_Some_v0 = v
 	return z
 }
 
 func None[T any]() Option[T] {
 	var z Option[T]
-	z.__gopp_tag = __gopp_tag_Option_None
+	z.Gopp_Tag = Gopp_Tag_Option_None
 	return z
 }
 `

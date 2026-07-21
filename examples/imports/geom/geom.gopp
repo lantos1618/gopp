@@ -1,0 +1,39 @@
+package geom
+
+// §3 example dependency: exported (capitalized) and unexported decls.
+
+type Point struct {
+    X int
+    Y int
+}
+
+enum Quadrant {
+    First
+    Second
+    Third
+    Fourth
+    Origin
+}
+
+enum Box[T] {
+    Box(v T)
+}
+
+// unexported: not visible through the geom qualifier
+func clampZero(n int) int {
+    if n < 0 { return 0 }
+    return n
+}
+
+func NewPoint(x int, y int) Point {
+    return Point{X: clampZero(x), Y: y}
+}
+
+func Locate(p Point) Quadrant {
+    if p.X == 0 && p.Y == 0 { return Origin }
+    if p.X > 0 && p.Y > 0 { return First }
+    if p.X < 0 && p.Y > 0 { return Second }
+    if p.X < 0 { return Third }
+    return Fourth
+}
+

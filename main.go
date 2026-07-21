@@ -26,16 +26,22 @@ import (
 //   - maps instantiated on declaration: var m map[K]V lowers to make(...)
 //   - Result[T,E] / Option[T] from the emitted prelude, with ? try
 //   - comptime expr: constants folded at go++ compile time (§10)
+//   - directory-based packages with import "dir" (§3): the qualifier is
+//     the dependency's package name, capitalized = exported, cycles error
 //   - strict numerics: untyped literal constants, explicit conversions,
 //     no implicit width mixing; error/any/<- removed from the language
 //
 // Rejected with clear errors (not yet supported):
 //   - guards on channel arms and .closed() arms (Go channels cannot peek)
-//   - imports, comptime functions
+//   - comptime functions
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir]")
+		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp fmt [-w] <files...>")
 		os.Exit(2)
+	}
+	if os.Args[1] == "fmt" {
+		runFmt(os.Args[2:])
+		return
 	}
 	in := os.Args[1]
 	outDir := "gopp-out"
@@ -61,6 +67,17 @@ func main() {
 		// partial AST — the follow-on noise helps nobody
 		printDiags(diags, string(src))
 	}
+	if len(file.Imports) > 0 {
+		// directory mode (§3): the input's package is its whole directory
+		root := loadGraph(filepath.Dir(in))
+		checkGraph(root)
+		if printGraphDiags(root) {
+			os.Exit(1)
+		}
+		emitGraph(root, outDir)
+		fmt.Printf("compiled %s -> %s (cd %s && go run .)\n", in, outDir, outDir)
+		return
+	}
 	chk, semDiags := check(file)
 	diags.items = append(diags.items, semDiags.items...)
 	printDiags(diags, string(src))
@@ -68,14 +85,10 @@ func main() {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fatal(err)
 	}
-	w := func(name, data string) {
-		if err := os.WriteFile(filepath.Join(outDir, name), []byte(data), 0o644); err != nil {
-			fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(outDir, "main.go"), []byte(goSrc), 0o644); err != nil {
+		fatal(err)
 	}
-	w("main.go", goSrc)
-	w("gopp_prelude.go", prelude)
-	w("go.mod", "module goppout\n\ngo 1.23\n")
+	writePrelude(outDir)
 	fmt.Printf("compiled %s -> %s (cd %s && go run .)\n", in, outDir, outDir)
 }
 

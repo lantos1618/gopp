@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -28,13 +29,16 @@ func compileAndRun(t *testing.T, srcPath string) string {
 		t.Fatalf("check:\n%s", diags)
 	}
 	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "gopp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	write := func(name, data string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	write("main.go", emit(file, chk))
-	write("gopp_prelude.go", prelude)
+	write("gopp/gopp.go", prelude)
 	write("go.mod", "module goppout\n\ngo 1.23\n")
 	cmd := exec.Command("go", "run", ".")
 	cmd.Dir = dir
@@ -82,5 +86,120 @@ func TestEndToEndComptime(t *testing.T) {
 	want := "7\n1048576\ngo++\ntrue\n42\n2\n3000\n60\nabc\n"
 	if got != want {
 		t.Fatalf("comptime.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
+// compilePkgAndRun drives the multi-package pipeline (§3) on a directory
+// and runs the resulting Go module.
+func compilePkgAndRun(t *testing.T, dir string) string {
+	t.Helper()
+	root := loadGraph(dir)
+	checkGraph(root)
+	if graphHasErrors(root) {
+		for _, p := range topoOrder(root) {
+			if len(p.diags.items) > 0 {
+				t.Logf("# %s\n%s", p.dir, p.diags.Render(p.src))
+			}
+		}
+		t.Fatal("checkGraph failed")
+	}
+	out := t.TempDir()
+	emitGraph(root, out)
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = out
+	out2, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run failed: %v\n%s", err, out2)
+	}
+	return string(out2)
+}
+
+func TestEndToEndImports(t *testing.T) {
+	got := compilePkgAndRun(t, "examples/imports")
+	want := "3 -2\nfourth\n0 0\nfourth\nbox 42\n"
+	if got != want {
+		t.Fatalf("imports output:\n got %q\nwant %q", got, want)
+	}
+}
+
+// writePkg makes a one-file package in dir/name for loader unit tests.
+func writePkg(t *testing.T, dir, name, src string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func graphDiagMessages(root *pkg) string {
+	var msgs string
+	for _, p := range topoOrder(root) {
+		for _, d := range p.diags.items {
+			msgs += d.Msg + "\n"
+		}
+	}
+	return msgs
+}
+
+func TestImportCycle(t *testing.T) {
+	dir := t.TempDir()
+	// a imports its subdirectory b; b imports ".." back to a
+	writePkg(t, filepath.Join(dir, "a"), "a.gopp", "package a\n\nimport \"b\"\n\nfunc A() int { return 1 }\n")
+	writePkg(t, filepath.Join(dir, "a", "b"), "b.gopp", "package b\n\nimport \"..\"\n\nfunc B() int { return 1 }\n")
+	root := loadGraph(filepath.Join(dir, "a"))
+	checkGraph(root)
+	if got := graphDiagMessages(root); !strings.Contains(got, "import cycle") {
+		t.Fatalf("expected import cycle error, got:\n%s", got)
+	}
+}
+
+func TestImportUnexported(t *testing.T) {
+	dir := t.TempDir()
+	writePkg(t, dir, "main.gopp", "package main\n\nimport \"foo\"\n\nfunc main() { println(foo.hidden()) }\n")
+	writePkg(t, filepath.Join(dir, "foo"), "foo.gopp", "package foo\n\nfunc hidden() int { return 1 }\n")
+	root := loadGraph(dir)
+	checkGraph(root)
+	if got := graphDiagMessages(root); !strings.Contains(got, "not exported") {
+		t.Fatalf("expected not-exported error, got:\n%s", got)
+	}
+}
+
+func TestImportUnknownName(t *testing.T) {
+	dir := t.TempDir()
+	writePkg(t, dir, "main.gopp", "package main\n\nimport \"foo\"\n\nfunc main() { println(foo.Nope()) }\n")
+	writePkg(t, filepath.Join(dir, "foo"), "foo.gopp", "package foo\n\nfunc Yes() int { return 1 }\n")
+	root := loadGraph(dir)
+	checkGraph(root)
+	if got := graphDiagMessages(root); !strings.Contains(got, "undefined: foo.Nope") {
+		t.Fatalf("expected undefined error, got:\n%s", got)
+	}
+}
+
+func TestImportQualifierShadowed(t *testing.T) {
+	// a local variable wins over the package qualifier (§3, like Go)
+	dir := t.TempDir()
+	writePkg(t, dir, "main.gopp", `package main
+
+import "foo"
+
+type Box struct {
+    N int
+}
+
+func main() {
+    foo := Box{N: 7}
+    println(foo.N)
+    println(foo.Yes())
+}
+`)
+	writePkg(t, filepath.Join(dir, "foo"), "foo.gopp", "package foo\n\nfunc Yes() int { return 1 }\n")
+	root := loadGraph(dir)
+	checkGraph(root)
+	// foo.N resolves as a field (shadowing), foo.Yes() then errors as a
+	// non-callable field — the point is the qualifier did NOT win
+	if got := graphDiagMessages(root); strings.Contains(got, "undefined: foo") {
+		t.Fatalf("qualifier should have been shadowed, got:\n%s", got)
 	}
 }

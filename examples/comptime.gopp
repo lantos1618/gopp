@@ -11,3 +11,4 @@ func main() {
     println(comptime minute / second)
     println(comptime string(rune(97)) + "bc")
 }
+

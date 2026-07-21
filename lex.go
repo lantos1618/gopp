@@ -34,8 +34,15 @@ func isAlpha(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 func lex(src string) ([]token, error) {
+	return lexAt(src, 0)
+}
+
+// lexAt lexes src with all token lines offset by base — used by the
+// package loader so every file of a multi-file package keeps accurate
+// positions against the concatenated package source (§3).
+func lexAt(src string, base int) ([]token, error) {
 	var toks []token
-	line := 1
+	line := 1 + base
 	lineStart := 0 // byte offset of the current line's first byte
 	i, n := 0, len(src)
 	// emit is always called with i at the token's first byte

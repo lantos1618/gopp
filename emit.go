@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -23,10 +24,12 @@ type emitter struct {
 	loops      []string
 	curResults []Type // enclosing function's results (for ? desugars)
 	needTime   bool   // emitted time.Duration somewhere: add the import
+	needGopp   bool   // emitted a gopp.* reference: add the prelude import
+	usedImports map[string]bool // package qualifiers referenced: add imports
 }
 
 func emit(f *File, c *checker) string {
-	e := &emitter{c: c}
+	e := &emitter{c: c, usedImports: map[string]bool{}}
 	for _, d := range f.Decls {
 		switch dd := d.(type) {
 		case *EnumDecl:
@@ -41,8 +44,23 @@ func emit(f *File, c *checker) string {
 	if e.needTime {
 		head += "import \"time\"\n\n"
 	}
+	if e.needGopp {
+		head += "import \"goppout/gopp\"\n\n"
+	}
+	// §3: one import per referenced dependency, deterministic order
+	var quals []string
+	for q := range e.usedImports {
+		quals = append(quals, q)
+	}
+	sort.Strings(quals)
+	for _, q := range quals {
+		head += "import \"goppout/" + c.importPaths[q] + "\"\n\n"
+	}
 	return head + e.buf.String()
 }
+
+// useImport records a reference to an imported package's qualifier.
+func (e *emitter) useImport(qual string) { e.usedImports[qual] = true }
 
 func (e *emitter) s(format string, args ...any) {
 	fmt.Fprintf(&e.buf, format, args...)
@@ -65,15 +83,27 @@ func (e *emitter) typeGo(t Type) string {
 		}
 		return tt.name
 	case *tEnum:
+		name := tt.decl.Name
+		if e.c.prelude[tt.decl] {
+			e.needGopp = true
+			name = "gopp." + name
+		} else if q := e.c.declPkg[tt.decl]; q != "" { // imported enum (§3)
+			e.useImport(q)
+			name = q + "." + name
+		}
 		if len(tt.args) == 0 {
-			return tt.decl.Name
+			return name
 		}
 		parts := make([]string, len(tt.args))
 		for i, a := range tt.args {
 			parts[i] = e.typeGo(a)
 		}
-		return tt.decl.Name + "[" + strings.Join(parts, ", ") + "]"
+		return name + "[" + strings.Join(parts, ", ") + "]"
 	case *tStruct:
+		if q := e.c.declPkg[tt.decl]; q != "" { // imported struct (§3)
+			e.useImport(q)
+			return q + "." + tt.decl.Name
+		}
 		return tt.decl.Name
 	case *tMap:
 		return "map[" + e.typeGo(tt.k) + "]" + e.typeGo(tt.v)
@@ -102,6 +132,15 @@ func (e *emitter) typeGo(t Type) string {
 func (e *emitter) typeExprGo(te TypeExpr) string {
 	switch t := te.(type) {
 	case *IdentType:
+		// prelude type names (Result, Option) are qualified: user code
+		// lands in its own package, the prelude in gopp
+		if en, ok := e.c.enums[t.Name]; ok && e.c.prelude[en] {
+			e.needGopp = true
+			return "gopp." + t.Name
+		}
+		if dot := strings.IndexByte(t.Name, '.'); dot > 0 { // pkg.Type (§3)
+			e.useImport(t.Name[:dot])
+		}
 		return t.Name
 	case *IndexType:
 		parts := make([]string, len(t.Args))
@@ -134,7 +173,21 @@ func (e *emitter) emitStruct(d *StructDecl) {
 // ---------- enums ----------
 
 func (e *emitter) tagConst(d *EnumDecl, v *Variant) string {
-	return "__gopp_tag_" + d.Name + "_" + v.Name
+	return "Gopp_Tag_" + d.Name + "_" + v.Name
+}
+
+// tagRef qualifies a tag constant: prelude enum tags live in the gopp
+// package, imported enum tags in their own (§3), local ones stay bare.
+func (e *emitter) tagRef(d *EnumDecl, v *Variant) string {
+	if e.c.prelude[d] {
+		e.needGopp = true
+		return "gopp." + e.tagConst(d, v)
+	}
+	if q := e.c.declPkg[d]; q != "" {
+		e.useImport(q)
+		return q + "." + e.tagConst(d, v)
+	}
+	return e.tagConst(d, v)
 }
 
 func (e *emitter) paramName(f Field, k int) string {
@@ -145,7 +198,7 @@ func (e *emitter) paramName(f Field, k int) string {
 }
 
 func (e *emitter) fieldGo(v *Variant, f Field, k int) string {
-	return "__gopp_F_" + v.Name + "_" + e.paramName(f, k)
+	return "Gopp_F_" + v.Name + "_" + e.paramName(f, k)
 }
 
 func (e *emitter) typeParams(d *EnumDecl) (decl, use string) {
@@ -158,7 +211,7 @@ func (e *emitter) typeParams(d *EnumDecl) (decl, use string) {
 }
 
 func (e *emitter) emitEnum(d *EnumDecl) {
-	tagT := "__gopp_tag_" + d.Name
+	tagT := "gopp_tag_" + d.Name
 	e.s("type %s int\n", tagT)
 	e.s("const (\n")
 	for i, v := range d.Variants {
@@ -171,7 +224,7 @@ func (e *emitter) emitEnum(d *EnumDecl) {
 	e.s(")\n")
 	tp, tpu := e.typeParams(d)
 	e.s("type %s%s struct {\n", d.Name, tp)
-	e.s("__gopp_tag %s\n", tagT)
+	e.s("Gopp_Tag %s\n", tagT)
 	for i := range d.Variants {
 		v := &d.Variants[i]
 		for k, fld := range v.Fields {
@@ -187,7 +240,7 @@ func (e *emitter) emitEnum(d *EnumDecl) {
 		}
 		e.s("func %s_%s%s(%s) %s%s {\n", d.Name, v.Name, tp, strings.Join(params, ", "), d.Name, tpu)
 		e.s("var __gopp_z %s%s\n", d.Name, tpu)
-		e.s("__gopp_z.__gopp_tag = %s\n", e.tagConst(d, v))
+		e.s("__gopp_z.Gopp_Tag = %s\n", e.tagConst(d, v))
 		for k, fld := range v.Fields {
 			e.s("__gopp_z.%s = %s\n", e.fieldGo(v, fld, k), e.paramName(fld, k))
 		}
@@ -199,8 +252,8 @@ func (e *emitter) emitEnum(d *EnumDecl) {
 // emitTry desugars `x := f()?` (spec §7) at statement level:
 //
 //	__gopp_tryN := f()
-//	if __gopp_tryN.IsErr() { return Err[Rt, Re](__gopp_tryN.__gopp_F_Err_v0) }
-//	<bind>(__gopp_tryN.__gopp_F_Ok_v0)
+//	if __gopp_tryN.IsErr() { return gopp.Err[Rt, Re](__gopp_tryN.Gopp_F_Err_v0) }
+//	<bind>(__gopp_tryN.Gopp_F_Ok_v0)
 //
 // No wrapping block: the binding must land in the current scope. Sema
 // (checkTry) has already proven the function returns a matching Result.
@@ -209,7 +262,8 @@ func (e *emitter) emitTry(te *TryExpr, bind func(tmp string)) {
 	e.s("%s := %s\n", tmp, e.expr(te.X))
 	rt := e.curResults[0].(*tEnum) // checkTry guaranteed Result[T, E]
 	e.s("if %s.IsErr() {\n", tmp)
-	e.s("return Err[%s, %s](%s.__gopp_F_Err_v0)\n", e.typeGo(rt.args[0]), e.typeGo(rt.args[1]), tmp)
+	e.needGopp = true
+	e.s("return gopp.Err[%s, %s](%s.Gopp_F_Err_v0)\n", e.typeGo(rt.args[0]), e.typeGo(rt.args[1]), tmp)
 	e.s("}\n")
 	bind(tmp)
 }
@@ -264,7 +318,7 @@ func (e *emitter) emitStmt(s Stmt) {
 		if st.Init != nil {
 			if te, ok := st.Init.(*TryExpr); ok {
 				e.emitTry(te, func(tmp string) {
-					e.s("var %s %s = %s.__gopp_F_Ok_v0\n", st.Name, ty, tmp)
+					e.s("var %s %s = %s.Gopp_F_Ok_v0\n", st.Name, ty, tmp)
 				})
 			} else {
 				e.s("var %s %s = %s\n", st.Name, ty, e.expr(st.Init))
@@ -279,7 +333,7 @@ func (e *emitter) emitStmt(s Stmt) {
 		if len(st.Lhs) == 1 && len(st.Rhs) == 1 {
 			if te, ok := st.Rhs[0].(*TryExpr); ok {
 				e.emitTry(te, func(tmp string) {
-					e.s("%s %s %s.__gopp_F_Ok_v0\n", e.expr(st.Lhs[0]), st.Op, tmp)
+					e.s("%s %s %s.Gopp_F_Ok_v0\n", e.expr(st.Lhs[0]), st.Op, tmp)
 				})
 				return
 			}
@@ -395,6 +449,11 @@ func (e *emitter) expr(x Expr) string {
 			// unit variant value: Active -> Status_Active(), None -> None[int]()
 			return e.ctorRef(ct, e.typeArgsGo(e.c.inferred[ex])) + "()"
 		}
+		if e.c.preludeVars[ex] {
+			// ms/second/minute live in the gopp package, exported
+			e.needGopp = true
+			return "gopp." + strings.ToUpper(ex.Name[:1]) + ex.Name[1:]
+		}
 		return ex.Name
 	case *BinaryExpr:
 		return "(" + e.expr(ex.X) + " " + ex.Op + " " + e.expr(ex.Y) + ")"
@@ -411,6 +470,15 @@ func (e *emitter) expr(x Expr) string {
 		}
 		return e.constGo(ex, cv)
 	case *SelectorExpr:
+		if ct, ok := e.c.resolved[ex]; ok {
+			// qualified unit variant value: foo.Active -> foo.Status_Active()
+			return e.ctorRef(ct, e.typeArgsGo(e.c.inferred[ex])) + "()"
+		}
+		if q, ok := e.c.qualified[ex]; ok {
+			// qualified function reference: foo.Bar (§3)
+			e.useImport(q)
+			return q + "." + ex.Sel
+		}
 		// (*p).Field — a bare unary operand would bind the selector first
 		if _, isUnary := ex.X.(*UnaryExpr); isUnary {
 			return "(" + e.expr(ex.X) + ")." + ex.Sel
@@ -420,6 +488,16 @@ func (e *emitter) expr(x Expr) string {
 		if id, ok := ex.X.(*Ident); ok {
 			if ct, ok := e.c.resolved[id]; ok {
 				// generic constructor instantiation: Ok[int, string]
+				var args []string
+				for _, a := range ex.Index {
+					args = append(args, e.expr(a))
+				}
+				return e.ctorRef(ct, args)
+			}
+		}
+		if sel, ok := ex.X.(*SelectorExpr); ok {
+			if ct, ok := e.c.resolved[sel]; ok {
+				// qualified generic constructor: foo.Box[int]
 				var args []string
 				for _, a := range ex.Index {
 					args = append(args, e.expr(a))
@@ -454,12 +532,17 @@ func (e *emitter) expr(x Expr) string {
 	return "/* unhandled expr */"
 }
 
-// ctorRef names a variant constructor: user enums are prefixed
-// (Status_Failed), prelude constructors stay bare (Ok, Err, Some, None).
+// ctorRef names a variant constructor: local enums are prefixed
+// (Status_Failed), imported ones qualified (foo.Status_Failed, §3),
+// prelude constructors go through the gopp package (gopp.Ok, gopp.Some).
 func (e *emitter) ctorRef(ct *ctorTarget, typeArgs []string) string {
 	name := ct.enum.Name + "_" + ct.variant.Name
 	if e.c.prelude[ct.enum] {
-		name = ct.variant.Name
+		e.needGopp = true
+		name = "gopp." + ct.variant.Name
+	} else if q := e.c.declPkg[ct.enum]; q != "" {
+		e.useImport(q)
+		name = q + "." + name
 	}
 	if len(typeArgs) > 0 {
 		return name + "[" + strings.Join(typeArgs, ", ") + "]"
@@ -532,6 +615,15 @@ func (e *emitter) call(ex *CallExpr) string {
 	argStr := strings.Join(args, ", ")
 	switch fun := ex.Fun.(type) {
 	case *SelectorExpr:
+		if ct, ok := e.c.resolved[fun]; ok {
+			// qualified constructor call: foo.Failed("x") -> foo.Status_Failed("x")
+			return e.ctorRef(ct, e.typeArgsGo(e.c.inferred[fun])) + "(" + argStr + ")"
+		}
+		if q, ok := e.c.qualified[fun]; ok {
+			// qualified function call: foo.Bar(1) (§3)
+			e.useImport(q)
+			return q + "." + fun.Sel + "(" + argStr + ")"
+		}
 		if _, isChan := e.c.types[fun.X].(*tChan); isChan {
 			switch fun.Sel {
 			case "send":
@@ -619,7 +711,8 @@ func (e *emitter) emitSelect(m *MatchExpr, valueCtx bool) {
 		case *SendPat:
 			e.s("case %s <- %s:\n", e.expr(p.Chan), e.expr(p.Value))
 		case *AfterPat:
-			e.s("case <-goppAfter(%s):\n", e.expr(p.D))
+			e.s("case <-gopp.GoppAfter(%s):\n", e.expr(p.D))
+			e.needGopp = true
 		case *WildcardPat:
 			e.s("default:\n")
 		}
@@ -680,10 +773,10 @@ func (e *emitter) emitSubjectChain(m *MatchExpr, valueCtx bool) {
 			var cond string
 			switch p := a.Pat.(type) {
 			case *VariantPat:
-				cond = mv + ".__gopp_tag == " + e.tagConst(en.decl, findVariant(en.decl, p.Name))
+				cond = mv + ".Gopp_Tag == " + e.tagRef(en.decl, findVariant(en.decl, p.Name))
 			case *IdentPat:
 				if e.c.patVariant[p] {
-					cond = mv + ".__gopp_tag == " + e.tagConst(en.decl, findVariant(en.decl, p.Name))
+					cond = mv + ".Gopp_Tag == " + e.tagRef(en.decl, findVariant(en.decl, p.Name))
 				} else {
 					cond = "true"
 				}

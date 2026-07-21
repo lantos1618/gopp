@@ -22,9 +22,9 @@ enum Temp {
 
 func classify(n int) string {
     return match n {
-    0 -> "zero"
-    1 -> "one"
-    _ -> "many"
+        0 -> "zero"
+        1 -> "one"
+        _ -> "many"
     }
 }
 
@@ -42,25 +42,25 @@ func main() {
     // guards on a subject match
     n := 150
     match n {
-    v if v > 100 -> println("big")
-    _ -> println("small")
+        v if v > 100 -> println("big")
+        _ -> println("small")
     }
 
     // expression-select: recv arm body type comes from the channel
     ch := chan[int](1)
     ch.send(42)
     got := match {
-    v := ch.recv() -> v
-    after(1 * second) -> -1
+        v := ch.recv() -> v
+        after(1 * second) -> -1
     }
     println("got", got)
 
     // enum with payload + wildcard
     t := Warm
     match t {
-    Warm -> println("warm")
-    Hot(deg) -> println("hot", deg)
-    _ -> println("cold")
+        Warm -> println("warm")
+        Hot(deg) -> println("hot", deg)
+        _ -> println("cold")
     }
 
     // literal patterns + wildcard (call classify to keep it honest)
@@ -70,16 +70,16 @@ func main() {
     // boolean arms (subject-less, no channels)
     x := 5
     match {
-    if x > 100 -> println("huge")
-    if x > 3 -> println("medium")
-    _ -> println("tiny")
+        if x > 100 -> println("huge")
+        if x > 3 -> println("medium")
+        _ -> println("tiny")
     }
 
     // after() fires when nothing is sent
     empty := chan[int]()
     match {
-    v := empty.recv() -> println(v)
-    after(10 * ms) -> println("timeout")
+        v := empty.recv() -> println(v)
+        after(10 * ms) -> println("timeout")
     }
 
     // maps are instantiated when declared — no nil-map panic
@@ -87,3 +87,4 @@ func main() {
     scores["alice"] = 90
     println(scores["alice"])
 }
+

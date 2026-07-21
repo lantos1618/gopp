@@ -10,7 +10,16 @@ package main
 
 type File struct {
 	PkgName string
+	Imports []*ImportDecl
 	Decls   []Decl
+}
+
+// ImportDecl is `import "path"` — the path is a directory relative to the
+// importing package's directory (§3: a package is a directory of .gopp
+// files; the path's last element is the package qualifier).
+type ImportDecl struct {
+	Path string
+	Line int
 }
 
 type Decl interface{ declNode() }

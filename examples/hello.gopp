@@ -26,16 +26,16 @@ func main() {
 
     // statement match on an enum
     match s {
-    Pending -> println("waiting...")
-    Active -> println("live")
-    Failed(reason) -> println("dead: " + reason)
+        Pending -> println("waiting...")
+        Active -> println("live")
+        Failed(reason) -> println("dead: " + reason)
     }
 
     // value-producing match
     msg := match s {
-    Pending -> "waiting..."
-    Active -> "live"
-    Failed(reason) -> "dead: " + reason
+        Pending -> "waiting..."
+        Active -> "live"
+        Failed(reason) -> "dead: " + reason
     }
     println(msg)
 
@@ -43,20 +43,21 @@ func main() {
     ch := chan[Status](1)
     ch.send(s)
     match {
-    _ := ch.recv() -> println("recv fired")
-    after(1 * second) -> println("timeout")
+        _ := ch.recv() -> println("recv fired")
+        after(1 * second) -> println("timeout")
     }
 
     // Result + match
     r := divide(10, 2)
     match r {
-    Ok(v) -> println(v)
-    Err(e) -> println("err: " + e)
+        Ok(v) -> println(v)
+        Err(e) -> println("err: " + e)
     }
 
     r2 := divide(1, 0)
     match r2 {
-    Ok(v) -> println(v)
-    Err(e) -> println("err: " + e)
+        Ok(v) -> println(v)
+        Err(e) -> println("err: " + e)
     }
 }
+

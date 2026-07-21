@@ -13,12 +13,12 @@ feature; documented in SPEC.md) · ❌ not done
 | 3 | two-phase collection, forward refs, mutual recursion | ✅ |
 | 4 | infinite-size type cycle detection | ✅ structs, deterministic DFS |
 | 5 | coherence + orphan rules | ➖ no behaviors/impls |
-| 6 | module tree + lexical scope stack | ⚠️ scope stack ✅; no modules (single file) |
+| 6 | module tree + lexical scope stack | ✅ directory packages, merged namespaces, scope stack |
 | 7 | namespaces (Type/Value/Behavior) | ⚠️ Type+Value; no Behavior namespace |
-| 8 | multi-segment paths, per-hop visibility | ➖ no modules |
-| 9 | import fixpoint | ➖ no imports |
-| 10 | shadowing policy enforcement point | ✅ same-scope `:=` = error, cross-scope allowed |
-| 11 | private-type leak check | ➖ no visibility |
+| 8 | multi-segment paths, per-hop visibility | ⚠️ two-segment `pkg.Name`, exported rule per hop; no deeper paths |
+| 9 | import fixpoint | ✅ recursive loader + memo; cycles error, no fixpoint needed (imports resolve before sema) |
+| 10 | shadowing policy enforcement point | ✅ same-scope `:=` = error, cross-scope allowed; locals shadow qualifiers |
+| 11 | private-type leak check | ⚠️ exported rule enforced at use sites; no public-signature leak check yet |
 | 12 | interned nominal types, alias-vs-newtype | ⚠️ nominal ✅; interned ❌; no aliases in language |
 | 13 | Error poison, Never bottom | ✅ |
 | 14 | kind/arity checking | ✅ |
@@ -37,7 +37,7 @@ feature; documented in SPEC.md) · ❌ not done
 | 27 | diagnostics: spans, secondary labels, suggestions | ✅ snippets+carets (parse cols), notes (return blame, redecl), did-you-mean; sema cols deferred |
 | 28 | test harness `//~ ERROR`, snapshots, fuzzing | ✅ annotations both directions + fuzz |
 
-**Score: 12 full ✅ · 8 partial ⚠️ · 8 N/A by language scope · 0 unaddressed**
+**Score: 14 full ✅ · 9 partial ⚠️ · 5 N/A by language scope · 0 unaddressed**
 
 Language-level wins beyond the skeleton (the "better types" program):
 removals of `error` / `any` / `<-` / nil maps · untyped literals with
@@ -67,12 +67,11 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
 
 1. ~~Parser recovery~~ ✅ · ~~Structs~~ ✅ · ~~`?` try~~ ✅ ·
    ~~better types (removals, widths, conversions, ctor inference)~~ ✅ ·
-   ~~`comptime` expr (§10)~~ ✅ · ~~diagnostics polish (§11)~~ ✅
-2. **Imports / modules** — reactivates §3 module tree, §8 paths, §9
-   import fixpoint.
-3. **§17 interning + §1 integer IDs** — when compile times or LSP make
+   ~~`comptime` expr (§10)~~ ✅ · ~~diagnostics polish (§11)~~ ✅ ·
+   ~~imports / modules (§3)~~ ✅
+2. **§17 interning + §1 integer IDs** — when compile times or LSP make
    them pay; both are wrappers, not rewrites, by design.
-4. **Sema column spans** — expressions carry lines only; threading cols
+3. **Sema column spans** — expressions carry lines only; threading cols
    through the AST is a deliberate defer (render falls back to
    line-level snippets).
 

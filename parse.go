@@ -1,6 +1,10 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // parse.go — go++ v2 compiler: recursive-descent parser.
 // Consumes the token stream from lex.go and produces the AST from ast.go.
@@ -91,6 +95,16 @@ func (p *parser) parseFile() *File {
 	p.skipNL()
 	p.expect("package")
 	f := &File{PkgName: p.expectIdent()}
+	// imports come first, before any declaration (§3)
+	for {
+		p.skipNL()
+		if p.cur().text != "import" {
+			break
+		}
+		if imp := p.tryImport(); imp != nil {
+			f.Imports = append(f.Imports, imp)
+		}
+	}
 	for {
 		p.skipNL()
 		if p.cur().kind == kEOF {
@@ -100,6 +114,34 @@ func (p *parser) parseFile() *File {
 			f.Decls = append(f.Decls, d)
 		}
 	}
+}
+
+// tryImport parses `import "dir/sub"`; on error it records the diagnostic
+// and returns nil so the file keeps parsing.
+func (p *parser) tryImport() (imp *ImportDecl) {
+	defer func() {
+		if r := recover(); r != nil {
+			if pe, ok := r.(parseError); ok {
+				p.diag.errorfAt(pe.line, pe.col, "%s", pe.msg)
+				p.synchronizeDecl()
+				imp = nil
+				return
+			}
+			panic(r)
+		}
+	}()
+	kw := p.cur()
+	p.expect("import")
+	tk := p.cur()
+	if tk.kind != kString {
+		p.errorft(tk, "expected import path string, got %q", tk.text)
+	}
+	p.next()
+	path, err := strconv.Unquote(tk.text)
+	if err != nil || path == "" || strings.HasPrefix(path, "/") {
+		p.errorft(tk, "invalid import path %q (relative directory)", tk.text)
+	}
+	return &ImportDecl{Path: path, Line: kw.line}
 }
 
 // tryDecl parses one declaration; on a parse error it records the
@@ -125,7 +167,7 @@ func (p *parser) tryDecl() (d Decl) {
 	case "type":
 		return p.parseStructDecl()
 	case "import":
-		p.errorft(p.cur(), "import is not supported in v2 yet")
+		p.errorft(p.cur(), "imports must come before declarations")
 	}
 	p.errorft(p.cur(), "expected declaration, got %q", p.cur().text)
 	return nil
@@ -139,7 +181,7 @@ func (p *parser) synchronizeDecl() {
 	for p.cur().kind != kEOF {
 		if p.pos > start && depth == 0 {
 			switch p.cur().text {
-			case "func", "fn", "enum":
+			case "func", "fn", "enum", "type", "import":
 				return
 			}
 		}
