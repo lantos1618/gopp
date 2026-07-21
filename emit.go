@@ -44,6 +44,16 @@ func emit(f *File, c *checker) string {
 			e.emitFunc(dd)
 		}
 	}
+	// §14: prelude operator interfaces actually referenced by an impl or
+	// a bound (unreferenced ones stay unwritten, like the prelude enums)
+	var opbs []string
+	for b := range e.c.usedPreludeBehavior {
+		opbs = append(opbs, b)
+	}
+	sort.Strings(opbs)
+	for _, b := range opbs {
+		e.emitOperatorInterface(b)
+	}
 	head := "package " + f.PkgName + "\n\n"
 	if e.needTime {
 		head += "import \"time\"\n\n"
@@ -283,6 +293,35 @@ func (e *emitter) emitBehavior(d *BehaviorDecl) {
 	e.s("}\n\n")
 }
 
+// emitOperatorInterface writes a prelude operator behavior as a Go
+// interface generic over Self (§14): Add[T] { add(T) T } and friends.
+func (e *emitter) emitOperatorInterface(name string) {
+	method, sig := "", ""
+	switch name {
+	case "Add":
+		method, sig = "add", "(T) T"
+	case "Sub":
+		method, sig = "sub", "(T) T"
+	case "Mul":
+		method, sig = "mul", "(T) T"
+	case "Div":
+		method, sig = "div", "(T) T"
+	case "Mod":
+		method, sig = "mod", "(T) T"
+	case "Eq":
+		method, sig = "eq", "(T) bool"
+	case "Ord":
+		method, sig = "cmp", "(T) int"
+	case "Neg":
+		method, sig = "neg", "() T"
+	case "Not":
+		method, sig = "not", "() bool"
+	default:
+		return
+	}
+	e.s("type %s[T any] interface {\n%s%s\n}\n\n", name, method, sig)
+}
+
 // emitImpl lowers impl methods to Go receiver methods — exactly how Go
 // interfaces get satisfied.
 func (e *emitter) emitImpl(d *ImplDecl) {
@@ -335,7 +374,10 @@ func (e *emitter) emitFunc(fn *FuncDecl) {
 		for i, tpn := range fn.TypeParams {
 			constraint := "any"
 			if i < len(fn.Bounds) && fn.Bounds[i] != "" {
-				constraint = fn.Bounds[i] // a behavior IS a Go constraint
+				constraint = fn.Bounds[i]
+				if e.c.preludeBehavior[constraint] {
+					constraint += "[" + tpn + "]" // §14: Add[T], Eq[T], ...
+				}
 			}
 			parts[i] = tpn + " " + constraint
 		}
@@ -521,8 +563,23 @@ func (e *emitter) expr(x Expr) string {
 		}
 		return ex.Name
 	case *BinaryExpr:
+		// §14: an operator impl desugars to the method call
+		if mn, ok := e.c.operatorOps[ex]; ok {
+			x, y := e.expr(ex.X), e.expr(ex.Y)
+			switch ex.Op {
+			case "!=":
+				return "!(" + x + "." + mn + "(" + y + "))"
+			case "<", "<=", ">", ">=":
+				return "(" + x + "." + mn + "(" + y + ") " + ex.Op + " 0)"
+			default: // + - * / % ==
+				return "(" + x + "." + mn + "(" + y + "))"
+			}
+		}
 		return "(" + e.expr(ex.X) + " " + ex.Op + " " + e.expr(ex.Y) + ")"
 	case *UnaryExpr:
+		if mn, ok := e.c.operatorOps[ex]; ok { // §14
+			return "(" + e.expr(ex.X) + "." + mn + "())"
+		}
 		return ex.Op + e.expr(ex.X)
 	case *CallExpr:
 		return e.call(ex)

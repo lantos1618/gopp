@@ -1,0 +1,63 @@
+package main
+
+// §14: operator overloading. Operator behaviors (Add, Sub, Mul, Div,
+// Mod, Eq, Ord, Neg, Not) live in the prelude; implementing one makes
+// the operator work on the type. An impl wins over the built-in rules.
+
+type Vec2 struct {
+    X int
+    Y int
+}
+
+impl Add for Vec2 {
+    add(self, rhs Vec2) Vec2 {
+        return Vec2{X: self.X + rhs.X, Y: self.Y + rhs.Y}
+    }
+}
+
+impl Sub for Vec2 {
+    sub(self, rhs Vec2) Vec2 {
+        return Vec2{X: self.X - rhs.X, Y: self.Y - rhs.Y}
+    }
+}
+
+impl Neg for Vec2 {
+    neg(self) Vec2 {
+        return Vec2{X: -self.X, Y: -self.Y}
+    }
+}
+
+impl Eq for Vec2 {
+    eq(self, rhs Vec2) bool {
+        return self.X == rhs.X && self.Y == rhs.Y
+    }
+}
+
+impl Ord for Vec2 {
+    cmp(self, rhs Vec2) int {
+        return self.X + self.Y - rhs.X - rhs.Y
+    }
+}
+
+// bounds make operators work on rigid type parameters
+func Sum[T: Add](a T, b T) T {
+    return a + b
+}
+
+func main() {
+    a := Vec2{X: 1, Y: 2}
+    b := Vec2{X: 10, Y: 20}
+    s := a + b
+    println(s.X, s.Y)
+    d := b - a
+    println(d.X, d.Y)
+    n := -a
+    println(n.X, n.Y)
+    println(a == Vec2{X: 1, Y: 2})
+    println(a != b)
+    println(a < b)
+    println(b > a)
+    v := Sum(a, b) // T = Vec2 via the Add bound
+    println(v.X, v.Y)
+}
+

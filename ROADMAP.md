@@ -49,6 +49,7 @@ generic constructor inference (`var r Result[int, string] = Ok(1)`,
 
 | § | item | status |
 |---|------|--------|
+| 14 | operator overloading | ⚠️ arith/comparison/unary core ✅; no compound-assign/index/shift overloads |
 | 17 | identifier interning | ❌ deferred (perf-only at this size) |
 | 28 | LSP | ⚠️ v1: diagnostics/hover/definition/completion/symbols; single-file, no local-var defs |
 | 29 | spec decisions written down | ✅ SPEC.md |
@@ -72,8 +73,8 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
    ~~comptime metaprogramming (§10)~~ ✅ · ~~sema columns (§11)~~ ✅ ·
    ~~LSP v1 (§28)~~ ✅ · ~~CI/README/`gopp run`~~ ✅ ·
    ~~comptime match + string builtins~~ ✅
-2. **§14 operator overloading** — behaviors exist; desugar operators to
-   behavior calls, built-in impls for numerics as intrinsics.
+2. **§8 leftovers** — impls on generic types, cross-package impls,
+   default method bodies; **§14 leftovers** — compound assign, indexing.
 3. **§17 interning + §1 integer IDs** — when compile times or LSP make
    them pay; both are wrappers, not rewrites, by design.
 4. **LSP v2** — import-aware analysis, local-var definitions, column
@@ -81,4 +82,4 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
 
 Cancelled: `@derive` (superseded by the better-types program — the
 language fixes the types instead of generating boilerplate over weak
-ones). §8 landed (generic functions + behaviors); §14 is next.
+ones). §8 and §14 landed.

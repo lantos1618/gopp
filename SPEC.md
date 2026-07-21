@@ -87,6 +87,24 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - Emission maps to Go generics directly (`func Identity[T any](x T) T`),
   so instantiation and monomorphization are the Go toolchain's job.
 
+## Operator overloading (§14)
+
+- The operator behaviors live in the prelude: `Add Sub Mul Div Mod`
+  (`+ - * / %`), `Eq` (`==`, `!=` — `!=` negates `eq`), `Ord`
+  (`< <= > >=` — desugared to `cmp(x, y) <op> 0`), `Neg` (unary `-`),
+  `Not` (unary `!`). They cannot be redeclared.
+- Implementing one enables the operator on the type:
+  `impl Add for Vec2 { add(self, rhs Vec2) Vec2 { ... } }`. An impl
+  WINS over the built-in rules; without one, user types fall through to
+  the ordinary errors ("invalid operation: Vec2 + Vec2").
+- Bounds make operators work on rigid type parameters:
+  `func Sum[T: Add](a T, b T) T { return a + b }`.
+- Emission desugars to method calls and writes the prelude interfaces
+  only when used: `type Add[T any] interface { add(T) T }`; a bound
+  `T: Add` becomes the Go constraint `T Add[T]`.
+- Deferred: compound assignment (`+=`), indexing operators, shifts on
+  user types.
+
 ## Behaviors (§8)
 
 - `behavior Stringer { String(self) string }` — a trait. The first
@@ -284,9 +302,9 @@ drop order) do not apply and are deliberately deleted from the roadmap.
   unmeasurable against the churn. Revisit when compile times hurt.
 - **§8 behaviors** — LANDED: behavior/impl/bounds, method resolution,
   coherence. Remaining: impls on generic types, cross-package impls,
-  default bodies, multi-bounds. Operator overloading (§14) can now
-  follow.
-- **§14 operator overloading** — needs behaviors first.
+  default bodies, multi-bounds.
+- **§14 operator overloading** — LANDED for the arithmetic/comparison
+  core; compound assignment, indexing, and shifts on user types remain.
 - **§16 macros** — no macro syntax; top-level comptime blocks (§10
   metaprogramming) cover the code-generation-shaped wants with live AST
   handles instead of token rewriting.

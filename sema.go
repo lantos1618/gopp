@@ -275,15 +275,18 @@ type checker struct {
 	// §8 behaviors: decls by name; impls/methods keyed by type name.
 	// methods[Type][Method] is the resolved signature (receiver dropped);
 	// one method name per type is the coherence rule (Go emission).
-	behaviors    map[string]*BehaviorDecl
-	behaviorSigs map[string]map[string]*tFunc // behavior -> method -> sig (Self = tTypeParam)
-	impls        map[string]map[string]*ImplDecl
-	methods      map[string]map[string]*tFunc
+	behaviors           map[string]*BehaviorDecl
+	behaviorSigs        map[string]map[string]*tFunc // behavior -> method -> sig (Self = tTypeParam)
+	impls               map[string]map[string]*ImplDecl
+	methods             map[string]map[string]*tFunc
+	preludeBehavior     map[string]bool // §14 operator traits (Add, Eq, ...)
+	usedPreludeBehavior map[string]bool // referenced by an impl or bound: emit the interface
 	// outputs for the emitter (side tables, §1)
 	types       map[Expr]Type
 	resolved    map[Expr]*ctorTarget // idents/call-funs that are variant references
 	inferred    map[Expr][]Type      // ctor exprs whose type args were inferred (§8-lite)
 	constVals   map[Expr]constVal    // comptime exprs -> compile-time values (§10)
+	operatorOps map[Expr]string      // overloaded operator exprs -> impl method name (§14)
 	patVariant  map[Pattern]bool     // IdentPat that matches a unit variant (not a binding)
 	cycleDone   map[*StructDecl]bool // structs already reported on an infinite-size cycle
 	preludeVars map[Expr]bool        // idents bound in the prelude (ms, second, minute)
@@ -331,28 +334,31 @@ func check(f *File) (*checker, *Diagnostics) {
 // paths for emission; src is the package source (comptime .body text).
 func checkImports(f *File, imports map[string]*checker, importPaths map[string]string, src ...string) (*checker, *Diagnostics) {
 	c := &checker{
-		diag:         &Diagnostics{},
-		enums:        map[string]*EnumDecl{},
-		structs:      map[string]*StructDecl{},
-		prelude:      map[*EnumDecl]bool{},
-		funcs:        map[string]*tFunc{},
-		ctors:        map[string]*ctorTarget{},
-		ambiguous:    map[string]bool{},
-		globals:      &scope{vars: map[string]Type{}},
-		types:        map[Expr]Type{},
-		resolved:     map[Expr]*ctorTarget{},
-		inferred:     map[Expr][]Type{},
-		constVals:    map[Expr]constVal{},
-		patVariant:   map[Pattern]bool{},
-		preludeVars:  map[Expr]bool{},
-		imports:      map[string]*checker{},
-		importPaths:  map[string]string{},
-		qualified:    map[Expr]string{},
-		declPkg:      map[Decl]string{},
-		behaviors:    map[string]*BehaviorDecl{},
-		behaviorSigs: map[string]map[string]*tFunc{},
-		impls:        map[string]map[string]*ImplDecl{},
-		methods:      map[string]map[string]*tFunc{},
+		diag:                &Diagnostics{},
+		enums:               map[string]*EnumDecl{},
+		structs:             map[string]*StructDecl{},
+		prelude:             map[*EnumDecl]bool{},
+		funcs:               map[string]*tFunc{},
+		ctors:               map[string]*ctorTarget{},
+		ambiguous:           map[string]bool{},
+		globals:             &scope{vars: map[string]Type{}},
+		types:               map[Expr]Type{},
+		resolved:            map[Expr]*ctorTarget{},
+		inferred:            map[Expr][]Type{},
+		constVals:           map[Expr]constVal{},
+		operatorOps:         map[Expr]string{},
+		patVariant:          map[Pattern]bool{},
+		preludeVars:         map[Expr]bool{},
+		imports:             map[string]*checker{},
+		importPaths:         map[string]string{},
+		qualified:           map[Expr]string{},
+		declPkg:             map[Decl]string{},
+		behaviors:           map[string]*BehaviorDecl{},
+		behaviorSigs:        map[string]map[string]*tFunc{},
+		impls:               map[string]map[string]*ImplDecl{},
+		methods:             map[string]map[string]*tFunc{},
+		preludeBehavior:     map[string]bool{},
+		usedPreludeBehavior: map[string]bool{},
 	}
 	for qual, dep := range imports {
 		c.imports[qual] = dep
@@ -458,6 +464,7 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 	// §8: behaviors and impls — after types, before signatures (bounds
 	// on function type params reference behaviors)
 	c.registerBehaviors(f)
+	c.registerPreludeBehaviors() // §14: after user decls so redeclaration errors
 	c.registerImpls(f)
 	// pass 1.5: function signatures (no bodies — mutual recursion works)
 	for _, d := range f.Decls {
@@ -478,6 +485,9 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 				if b != "" {
 					if _, ok := c.behaviors[b]; !ok {
 						c.diag.errorf(fn.Line, "undefined behavior %s in bound", b)
+					}
+					if c.preludeBehavior[b] {
+						c.usedPreludeBehavior[b] = true
 					}
 				}
 			}
@@ -599,6 +609,123 @@ func (c *checker) implements(ty Type, behavior string) bool {
 	return c.impls[tn][behavior] != nil
 }
 
+// ---------- §14 operator overloading ----------
+
+// operatorBehavior maps a binary operator to its prelude behavior and
+// method. Unary operators map separately (unaryOperatorBehavior): "-"
+// the sign flip is Neg, "-" the subtraction is Sub.
+func operatorBehavior(op string) (behavior, method string) {
+	switch op {
+	case "+":
+		return "Add", "add"
+	case "-":
+		return "Sub", "sub"
+	case "*":
+		return "Mul", "mul"
+	case "/":
+		return "Div", "div"
+	case "%":
+		return "Mod", "mod"
+	case "==", "!=":
+		return "Eq", "eq"
+	case "<", "<=", ">", ">=":
+		return "Ord", "cmp"
+	}
+	return "", ""
+}
+
+func unaryOperatorBehavior(op string) (behavior, method string) {
+	switch op {
+	case "-":
+		return "Neg", "neg"
+	case "!":
+		return "Not", "not"
+	}
+	return "", ""
+}
+
+// operatorMethod resolves an operator on ty to its impl method name, or
+// "" if the type doesn't implement it (§14: concrete types via impls,
+// rigid type parameters via their bound).
+func (c *checker) operatorMethod(ty Type, op string, unary bool) string {
+	behavior, method := operatorBehavior(op)
+	if unary {
+		behavior, method = unaryOperatorBehavior(op)
+	}
+	if behavior == "" {
+		return ""
+	}
+	switch t := ty.(type) {
+	case *tEnum:
+		if c.impls[t.decl.Name][behavior] != nil {
+			return method
+		}
+	case *tStruct:
+		if c.impls[t.decl.Name][behavior] != nil {
+			return method
+		}
+	case tTypeParam:
+		if c.curBounds[t.name] == behavior {
+			return method
+		}
+	}
+	return ""
+}
+
+// preludeBehaviors are the operator traits (§14), always in scope like
+// the prelude enums. Unary behaviors have no rhs parameter.
+func preludeBehaviors() []*BehaviorDecl {
+	self := Field{Name: "self"}
+	rhs := Field{Name: "rhs", Type: &IdentType{Name: "Self"}}
+	selfTy := []Field{{Type: &IdentType{Name: "Self"}}}
+	boolTy := []Field{{Type: &IdentType{Name: "bool"}}}
+	intTy := []Field{{Type: &IdentType{Name: "int"}}}
+	bin := func(name, method string, res []Field) *BehaviorDecl {
+		return &BehaviorDecl{Name: name, Methods: []BehaviorMethod{{Name: method, Params: []Field{self, rhs}, Results: res}}}
+	}
+	un := func(name, method string, res []Field) *BehaviorDecl {
+		return &BehaviorDecl{Name: name, Methods: []BehaviorMethod{{Name: method, Params: []Field{self}, Results: res}}}
+	}
+	return []*BehaviorDecl{
+		bin("Add", "add", selfTy), bin("Sub", "sub", selfTy),
+		bin("Mul", "mul", selfTy), bin("Div", "div", selfTy),
+		bin("Mod", "mod", selfTy),
+		bin("Eq", "eq", boolTy),
+		bin("Ord", "cmp", intTy),
+		un("Neg", "neg", selfTy),
+		un("Not", "not", boolTy),
+	}
+}
+
+// registerPreludeBehaviors puts the operator traits into the behavior
+// tables (§14); the emitter only writes an interface when it is used.
+func (c *checker) registerPreludeBehaviors() {
+	for _, b := range preludeBehaviors() {
+		if prev, dup := c.behaviors[b.Name]; dup {
+			// the user's declaration came first; point at it
+			c.diag.errorf(prev.Line, "behavior %s is a prelude operator behavior and cannot be redeclared", b.Name)
+			delete(c.behaviors, b.Name)
+			delete(c.behaviorSigs, b.Name)
+		}
+		c.behaviors[b.Name] = b
+		c.preludeBehavior[b.Name] = true
+		sigs := map[string]*tFunc{}
+		c.curTypeParams = []string{"Self"}
+		for _, m := range b.Methods {
+			ft := &tFunc{}
+			for _, p := range m.Params[1:] {
+				ft.params = append(ft.params, c.resolveType(p.Type))
+			}
+			for _, r := range m.Results {
+				ft.results = append(ft.results, c.resolveType(r.Type))
+			}
+			sigs[m.Name] = ft
+		}
+		c.curTypeParams = nil
+		c.behaviorSigs[b.Name] = sigs
+	}
+}
+
 // registerBehaviors collects behavior declarations and resolves their
 // method signatures with Self as a rigid type parameter (§8).
 func (c *checker) registerBehaviors(f *File) {
@@ -680,6 +807,9 @@ func (c *checker) registerImpls(f *File) {
 			continue
 		}
 		c.impls[tn][imp.Behavior] = imp
+		if c.preludeBehavior[imp.Behavior] {
+			c.usedPreludeBehavior[imp.Behavior] = true // §14: emit the interface
+		}
 		sigs := c.behaviorSigs[imp.Behavior]
 		seen := map[string]bool{}
 		for _, m := range imp.Methods {
@@ -1395,6 +1525,20 @@ func (c *checker) checkExpr(e Expr) Type {
 			ty = terr
 			break
 		}
+		// §14 operator overloading: an impl wins over the built-in rules
+		if mn := c.operatorMethod(xt, ex.Op, false); mn != "" {
+			if m := c.methodOf(xt, mn); m != nil && len(m.params) == 1 {
+				c.checkAgainst(ex.Y, m.params[0])
+				c.operatorOps[ex] = mn
+				switch ex.Op {
+				case "==", "!=", "<", "<=", ">", ">=":
+					ty = tbool
+				default:
+					ty = m.results[0]
+				}
+				break
+			}
+		}
 		// no implicit conversions (§7): operands must agree
 		switch ex.Op {
 		case "&&", "||":
@@ -1447,6 +1591,16 @@ func (c *checker) checkExpr(e Expr) Type {
 		case isErr(xt):
 			ty = terr
 		default:
+			// §14: overloaded unary operators win
+			if ex.Op == "-" || ex.Op == "!" {
+				if mn := c.operatorMethod(xt, ex.Op, true); mn != "" {
+					if m := c.methodOf(xt, mn); m != nil {
+						c.operatorOps[ex] = mn
+						ty = m.results[0]
+						break
+					}
+				}
+			}
 			switch ex.Op {
 			case "!":
 				ty = tbool

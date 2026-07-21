@@ -1,0 +1,45 @@
+package main
+
+// §14 operator overloading: error paths.
+
+type Vec2 struct {
+    X int
+    Y int
+}
+
+impl Add for Vec2 {
+    add(self, rhs Vec2) Vec2 {
+        return Vec2{X: self.X + rhs.X, Y: self.Y + rhs.Y}
+    }
+}
+
+type Bad struct {
+    N int
+}
+
+impl Add for Bad {
+    add(self, rhs int) Bad { //~ ERROR method add does not match behavior Add's signature
+        return Bad{N: self.N + rhs}
+    }
+}
+
+behavior Add { //~ ERROR behavior Add is a prelude operator behavior and cannot be redeclared
+    add(self, rhs Self) Self
+}
+
+type Plain struct {
+    N int
+}
+
+func Sum[T: Add](a T, b T) T {
+    return a + b
+}
+
+func main() {
+    a := Vec2{X: 1, Y: 2}
+    println(a + a)
+    p := Plain{N: 1}
+    println(p + p) //~ ERROR invalid operation: Plain + Plain (mismatched types)
+    println(Sum(1, 2)) //~ ERROR int does not implement Add (bound of Sum's T)
+}
+

@@ -146,6 +146,14 @@ func TestEndToEndBehavior(t *testing.T) {
 	}
 }
 
+func TestEndToEndOperators(t *testing.T) {
+	got := compileAndRun(t, "examples/operators.gopp")
+	want := "11 22\n9 18\n-1 -2\ntrue\ntrue\ntrue\ntrue\n11 22\n"
+	if got != want {
+		t.Fatalf("operators.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
 // writePkg makes a one-file package in dir/name for loader unit tests.
 func writePkg(t *testing.T, dir, name, src string) {
 	t.Helper()
