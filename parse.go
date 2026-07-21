@@ -183,7 +183,7 @@ func (p *parser) parseComptimeDecl() Decl {
 	if p.cur().text != "{" {
 		p.errorft(p.cur(), "expected { after comptime at top level (comptime expr lives inside functions)")
 	}
-	return &ComptimeDecl{Body: p.parseBlock(), Line: tk.line}
+	return &ComptimeDecl{Body: p.parseBlock(), Line: tk.line, Col: tk.col}
 }
 
 // synchronizeDecl skips tokens until something that can start a
@@ -366,33 +366,34 @@ func (p *parser) parseStructDecl() Decl {
 func (p *parser) parseType() TypeExpr {
 	tk := p.cur()
 	line := tk.line
+	col := tk.col
 	switch tk.text {
 	case "map":
 		p.next()
 		p.expect("[")
 		k := p.parseType()
 		p.expect("]")
-		return &MapType{K: k, V: p.parseType(), Line: line}
+		return &MapType{K: k, V: p.parseType(), Line: line, Col: col}
 	case "chan":
 		p.next()
 		p.expect("[")
 		e := p.parseType()
 		p.expect("]")
-		return &ChanType{Elem: e, Line: line}
+		return &ChanType{Elem: e, Line: line, Col: col}
 	case "[":
 		p.next()
 		p.expect("]")
-		return &SliceType{Elem: p.parseType(), Line: line}
+		return &SliceType{Elem: p.parseType(), Line: line, Col: col}
 	case "*":
 		p.next()
-		return &StarType{X: p.parseType(), Line: line}
+		return &StarType{X: p.parseType(), Line: line, Col: col}
 	}
 	if tk.kind == kIdent {
 		p.next()
-		var t TypeExpr = &IdentType{Name: tk.text, Line: line}
+		var t TypeExpr = &IdentType{Name: tk.text, Line: line, Col: col}
 		if p.cur().text == "." { // pkg.Type
 			p.next()
-			t = &IdentType{Name: tk.text + "." + p.expectIdent(), Line: line}
+			t = &IdentType{Name: tk.text + "." + p.expectIdent(), Line: line, Col: col}
 		}
 		if p.cur().text == "[" { // generic instantiation
 			p.next()
@@ -406,7 +407,7 @@ func (p *parser) parseType() TypeExpr {
 				break
 			}
 			p.expect("]")
-			t = &IndexType{X: t, Args: args, Line: line}
+			t = &IndexType{X: t, Args: args, Line: line, Col: col}
 		}
 		return t
 	}
@@ -464,21 +465,21 @@ func (p *parser) parseStmt() Stmt {
 		return p.parseFor()
 	case "loop":
 		p.next()
-		return &LoopStmt{Body: p.parseBlock(), Line: tk.line}
+		return &LoopStmt{Body: p.parseBlock(), Line: tk.line, Col: tk.col}
 	case "break":
 		p.next()
 		label := ""
 		if p.cur().kind == kIdent {
 			label = p.next().text
 		}
-		return &BreakStmt{Label: label, Line: tk.line}
+		return &BreakStmt{Label: label, Line: tk.line, Col: tk.col}
 	case "return":
 		p.next()
 		var res []Expr
 		if p.cur().kind != kNewline && p.cur().text != "}" {
 			res = p.parseExprList()
 		}
-		return &ReturnStmt{Results: res, Line: tk.line}
+		return &ReturnStmt{Results: res, Line: tk.line, Col: tk.col}
 	case "var":
 		return p.parseVar()
 	case "select", "switch", "case":
@@ -490,19 +491,19 @@ func (p *parser) parseStmt() Stmt {
 	switch p.cur().text {
 	case ":=", "=", "+=", "-=", "*=", "/=":
 		op := p.next().text
-		return &AssignStmt{Lhs: lhs, Op: op, Rhs: p.parseExprList(), Line: tk.line}
+		return &AssignStmt{Lhs: lhs, Op: op, Rhs: p.parseExprList(), Line: tk.line, Col: tk.col}
 	case "++", "--":
 		op := p.next().text
-		return &IncDecStmt{X: lhs[0], Op: op, Line: tk.line}
+		return &IncDecStmt{X: lhs[0], Op: op, Line: tk.line, Col: tk.col}
 	}
 	if len(lhs) > 1 {
 		p.errorft(tk, "unexpected expression list in statement")
 	}
-	return &ExprStmt{X: lhs[0], Line: tk.line}
+	return &ExprStmt{X: lhs[0], Line: tk.line, Col: tk.col}
 }
 
 func (p *parser) parseVar() Stmt {
-	line := p.next().line // var
+	tk := p.next() // var
 	name := p.expectIdent()
 	ty := p.parseType()
 	var init Expr
@@ -510,11 +511,11 @@ func (p *parser) parseVar() Stmt {
 		p.next()
 		init = p.parseExpr(1)
 	}
-	return &VarStmt{Name: name, Type: ty, Init: init, Line: line}
+	return &VarStmt{Name: name, Type: ty, Init: init, Line: tk.line, Col: tk.col}
 }
 
 func (p *parser) parseIf() Stmt {
-	line := p.next().line // if
+	tk := p.next() // if
 	cond := p.parseCond()
 	then := p.parseBlock()
 	var els Stmt
@@ -531,13 +532,14 @@ func (p *parser) parseIf() Stmt {
 	} else {
 		p.pos = save
 	}
-	return &IfStmt{Cond: cond, Then: then, Else: els, Line: line}
+	return &IfStmt{Cond: cond, Then: then, Else: els, Line: tk.line, Col: tk.col}
 }
 
 func (p *parser) parseFor() Stmt {
-	line := p.next().line // for
+	tk := p.next() // for
+	line, col := tk.line, tk.col
 	if p.cur().text == "{" {
-		return &ForStmt{Body: p.parseBlock(), Line: line}
+		return &ForStmt{Body: p.parseBlock(), Line: line, Col: col}
 	}
 	// for x in expr { } — comptime-only iteration (§10); sema rejects it
 	// in ordinary code
@@ -548,21 +550,21 @@ func (p *parser) parseFor() Stmt {
 		p.noStructLit = true // the body's { must not parse as a struct literal
 		x := p.parseExpr(1)
 		p.noStructLit = save
-		return &ForInStmt{Var: v, X: x, Body: p.parseBlock(), Line: line}
+		return &ForInStmt{Var: v, X: x, Body: p.parseBlock(), Line: line, Col: col}
 	}
 	save := p.noStructLit
 	p.noStructLit = true
 	first := p.parseExprList()
 	p.noStructLit = save
 	if p.cur().text == "{" {
-		return &ForStmt{Cond: first[0], Body: p.parseBlock(), Line: line}
+		return &ForStmt{Cond: first[0], Body: p.parseBlock(), Line: line, Col: col}
 	}
 	var init Stmt
 	if op := p.cur().text; op == ":=" || op == "=" {
 		p.next()
-		init = &AssignStmt{Lhs: first, Op: op, Rhs: p.parseExprList(), Line: line}
+		init = &AssignStmt{Lhs: first, Op: op, Rhs: p.parseExprList(), Line: line, Col: col}
 	} else {
-		init = &ExprStmt{X: first[0], Line: line}
+		init = &ExprStmt{X: first[0], Line: line, Col: col}
 	}
 	p.expect(";")
 	var cond Expr
@@ -576,21 +578,22 @@ func (p *parser) parseFor() Stmt {
 		switch p.cur().text {
 		case "++", "--":
 			op := p.next().text
-			post = &IncDecStmt{X: e[0], Op: op, Line: line}
+			post = &IncDecStmt{X: e[0], Op: op, Line: line, Col: col}
 		case "=", ":=":
 			op := p.next().text
-			post = &AssignStmt{Lhs: e, Op: op, Rhs: p.parseExprList(), Line: line}
+			post = &AssignStmt{Lhs: e, Op: op, Rhs: p.parseExprList(), Line: line, Col: col}
 		default:
-			post = &ExprStmt{X: e[0], Line: line}
+			post = &ExprStmt{X: e[0], Line: line, Col: col}
 		}
 	}
-	return &ForStmt{Init: init, Cond: cond, Post: post, Body: p.parseBlock(), Line: line}
+	return &ForStmt{Init: init, Cond: cond, Post: post, Body: p.parseBlock(), Line: line, Col: col}
 }
 
 // ---------- match ----------
 
 func (p *parser) parseMatch() Expr {
-	line := p.next().line // match
+	tk := p.next() // match
+	line := tk.line
 	fair := false
 	if p.cur().text == "." && p.peek().text == "fair" {
 		p.next()
@@ -617,7 +620,7 @@ func (p *parser) parseMatch() Expr {
 			arms = append(arms, a)
 		}
 	}
-	return &MatchExpr{Subject: subj, Arms: arms, Fair: fair, Line: line}
+	return &MatchExpr{Subject: subj, Arms: arms, Fair: fair, Line: line, Col: tk.col}
 }
 
 // tryArm parses one match arm; on a parse error it records the diagnostic,
@@ -638,7 +641,7 @@ func (p *parser) tryArm() (a MatchArm, ok bool) {
 }
 
 func (p *parser) parseArm() MatchArm {
-	line := p.cur().line
+	tk := p.cur()
 	pat := p.parsePattern()
 	var guard Expr
 	if p.cur().text == "if" {
@@ -647,7 +650,7 @@ func (p *parser) parseArm() MatchArm {
 	}
 	p.expect("->")
 	p.skipNL()
-	a := MatchArm{Pat: pat, Guard: guard, Line: line}
+	a := MatchArm{Pat: pat, Guard: guard, Line: tk.line, Col: tk.col}
 	if p.cur().text == "{" {
 		a.Body = p.parseBlock().List
 	} else {
@@ -659,9 +662,10 @@ func (p *parser) parseArm() MatchArm {
 func (p *parser) parsePattern() Pattern {
 	tk := p.cur()
 	line := tk.line
+	col := tk.col
 	if tk.text == "if" {
 		p.next()
-		return &BoolPat{X: p.parseExpr(1), Line: line}
+		return &BoolPat{X: p.parseExpr(1), Line: line, Col: col}
 	}
 	if tk.kind == kIdent && p.peek().text == ":=" {
 		bind := p.next().text
@@ -669,21 +673,21 @@ func (p *parser) parsePattern() Pattern {
 		e := p.parseExpr(1)
 		if c, ok := e.(*CallExpr); ok && len(c.Args) == 0 {
 			if sel, ok := c.Fun.(*SelectorExpr); ok && sel.Sel == "recv" {
-				return &RecvPat{Bind: bind, Chan: sel.X, Line: line}
+				return &RecvPat{Bind: bind, Chan: sel.X, Line: line, Col: col}
 			}
 		}
 		p.errorf(line, "recv arm must look like x := ch.recv()")
 	}
 	if tk.text == "_" {
 		p.next()
-		return &WildcardPat{Line: line}
+		return &WildcardPat{Line: line, Col: col}
 	}
 	if tk.text == "after" && p.peek().text == "(" {
 		p.next()
 		p.next()
 		d := p.parseExpr(1)
 		p.expect(")")
-		return &AfterPat{D: d, Line: line}
+		return &AfterPat{D: d, Line: line, Col: col}
 	}
 	e := p.parseUnary()
 	// channel-shaped patterns
@@ -694,9 +698,9 @@ func (p *parser) parsePattern() Pattern {
 				if len(c.Args) != 1 {
 					p.errorf(line, "send arm needs exactly one value")
 				}
-				return &SendPat{Chan: sel.X, Value: c.Args[0], Line: line}
+				return &SendPat{Chan: sel.X, Value: c.Args[0], Line: line, Col: col}
 			case "closed":
-				return &ClosedPat{Chan: sel.X, Line: line}
+				return &ClosedPat{Chan: sel.X, Line: line, Col: col}
 			}
 		}
 		// Variant( bindings ) — destructuring
@@ -711,15 +715,15 @@ func (p *parser) parsePattern() Pattern {
 				}
 			}
 			if allIdent {
-				return &VariantPat{Name: id.Name, Bindings: bindings, Line: line}
+				return &VariantPat{Name: id.Name, Bindings: bindings, Line: line, Col: col}
 			}
 		}
 	}
 	if id, ok := e.(*Ident); ok {
 		// bare name: unit variant or subject binding — sema disambiguates
-		return &IdentPat{Name: id.Name, Line: line}
+		return &IdentPat{Name: id.Name, Line: line, Col: col}
 	}
-	return &LiteralPat{X: e, Line: line}
+	return &LiteralPat{X: e, Line: line, Col: col}
 }
 
 // ---------- expressions ----------
@@ -754,7 +758,7 @@ func (p *parser) parseExpr(minPrec int) Expr {
 		}
 		p.next()
 		y := p.parseExpr(prec + 1)
-		x = &BinaryExpr{Op: tk.text, X: x, Y: y, Line: tk.line}
+		x = &BinaryExpr{Op: tk.text, X: x, Y: y, Line: tk.line, Col: tk.col}
 	}
 	return x
 }
@@ -764,7 +768,7 @@ func (p *parser) parseUnary() Expr {
 	switch tk.text {
 	case "-", "!", "+", "^", "&", "*":
 		p.next()
-		return &UnaryExpr{Op: tk.text, X: p.parseUnary(), Line: tk.line}
+		return &UnaryExpr{Op: tk.text, X: p.parseUnary(), Line: tk.line, Col: tk.col}
 	case "<-":
 		// spec §5 removal: bare channel receive is gone, use ch.recv()
 		p.errorft(tk, "<- was removed in go++ — use ch.recv() and ch.send(v)")
@@ -777,20 +781,22 @@ func (p *parser) parseUnary() Expr {
 func (p *parser) parsePostfix() Expr {
 	x := p.parsePrimary()
 	for {
-		switch p.cur().text {
+		tk := p.cur()
+		switch tk.text {
 		case ".":
 			p.next()
-			x = &SelectorExpr{X: x, Sel: p.expectIdent(), Line: p.cur().line}
+			name := p.cur()
+			x = &SelectorExpr{X: x, Sel: p.expectIdent(), Line: name.line, Col: name.col}
 		case "(":
-			x = &CallExpr{Fun: x, Args: p.parseCallArgs(), Line: p.cur().line}
+			x = &CallExpr{Fun: x, Args: p.parseCallArgs(), Line: tk.line, Col: tk.col}
 		case "[":
 			p.next()
 			idx := p.parseExprList()
 			p.expect("]")
-			x = &IndexExpr{X: x, Index: idx, Line: p.cur().line}
+			x = &IndexExpr{X: x, Index: idx, Line: tk.line, Col: tk.col}
 		case "?":
 			p.next()
-			x = &TryExpr{X: x, Line: p.cur().line}
+			x = &TryExpr{X: x, Line: tk.line, Col: tk.col}
 		case "{":
 			if p.noStructLit {
 				return x
@@ -806,10 +812,11 @@ func (p *parser) parsePostfix() Expr {
 // name in expression position.
 func (p *parser) parseStructLit(x Expr) Expr {
 	line := p.cur().line
+	col := p.cur().col
 	var te TypeExpr
 	switch t := x.(type) {
 	case *Ident:
-		te = &IdentType{Name: t.Name, Line: t.Line}
+		te = &IdentType{Name: t.Name, Line: t.Line, Col: t.Col}
 	default:
 		p.errorf(line, "expected a struct type name before {")
 	}
@@ -822,20 +829,21 @@ func (p *parser) parseStructLit(x Expr) Expr {
 			break
 		}
 		fl := p.cur().line
+		fc := p.cur().col
 		if p.cur().kind == kIdent && p.peek().text == ":" {
 			name := p.next().text
 			p.next() // :
 			v := p.parseExpr(1)
-			fields = append(fields, FieldVal{Name: name, Value: v, Line: fl})
+			fields = append(fields, FieldVal{Name: name, Value: v, Line: fl, Col: fc})
 		} else {
 			v := p.parseExpr(1)
-			fields = append(fields, FieldVal{Value: v, Line: fl})
+			fields = append(fields, FieldVal{Value: v, Line: fl, Col: fc})
 		}
 		if p.cur().text == "," {
 			p.next()
 		}
 	}
-	return &StructLitExpr{Type: te, Fields: fields, Line: line}
+	return &StructLitExpr{Type: te, Fields: fields, Line: line, Col: col}
 }
 
 // parseCond parses a condition expression with composite literals
@@ -862,16 +870,17 @@ func (p *parser) parsePrimary() Expr {
 	switch {
 	case tk.kind == kInt || tk.kind == kFloat || tk.kind == kString || tk.kind == kRune:
 		p.next()
-		return &BasicLit{Kind: tk.kind, Value: tk.text, Line: tk.line}
+		return &BasicLit{Kind: tk.kind, Value: tk.text, Line: tk.line, Col: tk.col}
 	case tk.kind == kIdent:
 		switch tk.text {
 		case "match":
 			return p.parseMatch()
 		case "comptime":
 			p.next()
-			return &ComptimeExpr{X: p.parseExpr(1), Line: tk.line}
+			return &ComptimeExpr{X: p.parseExpr(1), Line: tk.line, Col: tk.col}
 		case "chan":
 			line := p.next().line
+			col := tk.col
 			p.expect("[")
 			elem := p.parseType()
 			p.expect("]")
@@ -884,10 +893,10 @@ func (p *parser) parsePrimary() Expr {
 				capE = p.parseExpr(1)
 			}
 			p.expect(")")
-			return &MakeChanExpr{Elem: elem, Cap: capE, Line: line}
+			return &MakeChanExpr{Elem: elem, Cap: capE, Line: line, Col: col}
 		}
 		p.next()
-		return &Ident{Name: tk.text, Line: tk.line}
+		return &Ident{Name: tk.text, Line: tk.line, Col: tk.col}
 	case tk.text == "(":
 		p.next()
 		e := p.parseExpr(1)

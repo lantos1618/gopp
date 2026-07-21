@@ -72,6 +72,7 @@ func (*ComptimeDecl) declNode() {}
 type ComptimeDecl struct {
 	Body *Block
 	Line int
+	Col  int
 }
 
 // ---------- types ----------
@@ -81,32 +82,38 @@ type TypeExpr interface{ typeNode() }
 type IdentType struct {
 	Name string // int, string, Status, T ...
 	Line int
+	Col  int
 }
 
 type IndexType struct { // Result[int, string]
 	X    TypeExpr
 	Args []TypeExpr
 	Line int
+	Col  int
 }
 
 type MapType struct {
 	K, V TypeExpr
 	Line int
+	Col  int
 }
 
 type ChanType struct {
 	Elem TypeExpr
 	Line int
+	Col  int
 }
 
 type SliceType struct {
 	Elem TypeExpr
 	Line int
+	Col  int
 }
 
 type StarType struct {
 	X    TypeExpr
 	Line int
+	Col  int
 }
 
 func (*IdentType) typeNode() {}
@@ -132,11 +139,13 @@ type VarStmt struct {
 	Type TypeExpr
 	Init Expr // nil = no initializer
 	Line int
+	Col  int
 }
 
 type ExprStmt struct {
 	X    Expr
 	Line int
+	Col  int
 }
 
 type AssignStmt struct {
@@ -144,6 +153,7 @@ type AssignStmt struct {
 	Op   string // ":=", "=", "+=", ...
 	Rhs  []Expr
 	Line int
+	Col  int
 }
 
 type IfStmt struct {
@@ -152,6 +162,7 @@ type IfStmt struct {
 	Then *Block
 	Else Stmt // *Block or *IfStmt or nil
 	Line int
+	Col  int
 }
 
 // ForStmt covers Go's for: for [init]; [cond]; [post] { } and for-range
@@ -162,11 +173,13 @@ type ForStmt struct {
 	Post Stmt
 	Body *Block
 	Line int
+	Col  int
 }
 
 type LoopStmt struct {
 	Body *Block
 	Line int
+	Col  int
 }
 
 // ForInStmt is `for x in expr { }` — comptime-only iteration over a
@@ -176,22 +189,26 @@ type ForInStmt struct {
 	X    Expr
 	Body *Block
 	Line int
+	Col  int
 }
 
 type BreakStmt struct {
 	Label string // "" = plain break, "loop" = innermost go++ loop
 	Line  int
+	Col   int
 }
 
 type ReturnStmt struct {
 	Results []Expr
 	Line    int
+	Col     int
 }
 
 type IncDecStmt struct {
 	X    Expr
 	Op   string // "++" or "--"
 	Line int
+	Col  int
 }
 
 func (*Block) stmtNode()      {}
@@ -213,36 +230,42 @@ type Expr interface{ exprNode() }
 type Ident struct {
 	Name string
 	Line int
+	Col  int
 }
 
 type BasicLit struct {
 	Kind  tokKind // kInt, kFloat, kString, kRune
 	Value string
 	Line  int
+	Col   int
 }
 
 type BinaryExpr struct {
 	Op   string
 	X, Y Expr
-	Line int
+	Line int // operator position
+	Col  int
 }
 
 type UnaryExpr struct {
 	Op   string // -, !, <-
 	X    Expr
 	Line int
+	Col  int
 }
 
 type CallExpr struct {
 	Fun  Expr
 	Args []Expr
-	Line int
+	Line int // the ( position
+	Col  int
 }
 
 type SelectorExpr struct {
 	X    Expr
 	Sel  string
-	Line int
+	Line int // the selector name position
+	Col  int
 }
 
 // IndexExpr covers a[i] and generic instantiation Result[int, string];
@@ -250,7 +273,8 @@ type SelectorExpr struct {
 type IndexExpr struct {
 	X     Expr
 	Index []Expr
-	Line  int
+	Line  int // the [ position
+	Col   int
 }
 
 // MakeChanExpr is `chan[T](cap)` / `chan[T]()` in expression position.
@@ -258,6 +282,7 @@ type MakeChanExpr struct {
 	Elem TypeExpr
 	Cap  Expr // nil = unbuffered
 	Line int
+	Col  int
 }
 
 // StructLitExpr is a composite literal: User{ID: 1, Name: "x"} or
@@ -266,12 +291,14 @@ type StructLitExpr struct {
 	Type   TypeExpr
 	Fields []FieldVal
 	Line   int
+	Col    int
 }
 
 type FieldVal struct {
 	Name  string
 	Value Expr
 	Line  int
+	Col   int
 }
 
 // TryExpr is `expr?` — the try operator (spec §7). It is only valid as
@@ -281,6 +308,7 @@ type FieldVal struct {
 type TryExpr struct {
 	X    Expr
 	Line int
+	Col  int
 }
 
 // ComptimeExpr is `comptime expr`: the expression must be constant —
@@ -290,6 +318,7 @@ type TryExpr struct {
 type ComptimeExpr struct {
 	X    Expr
 	Line int
+	Col  int
 }
 
 // MatchExpr is both a statement (wrapped in ExprStmt) and an expression.
@@ -299,6 +328,7 @@ type MatchExpr struct {
 	Arms    []MatchArm
 	Fair    bool
 	Line    int
+	Col     int
 }
 
 func (*Ident) exprNode()         {}
@@ -318,18 +348,23 @@ func (*ComptimeExpr) exprNode()  {}
 
 type Pattern interface{ patNode() }
 
-type WildcardPat struct{ Line int }
+type WildcardPat struct {
+	Line int
+	Col  int
+}
 
 // IdentPat binds the subject value to Name.
 type IdentPat struct {
 	Name string
 	Line int
+	Col  int
 }
 
 // LiteralPat matches by equality (0, "x", someExpr).
 type LiteralPat struct {
 	X    Expr
 	Line int
+	Col  int
 }
 
 // VariantPat destructures an enum variant: Failed(reason), Ok(v).
@@ -337,6 +372,7 @@ type VariantPat struct {
 	Name     string
 	Bindings []string
 	Line     int
+	Col      int
 }
 
 // RecvPat: x := ch.recv()
@@ -344,6 +380,7 @@ type RecvPat struct {
 	Bind string // "" or "_" = discard
 	Chan Expr
 	Line int
+	Col  int
 }
 
 // SendPat: ch.send(v)
@@ -351,24 +388,28 @@ type SendPat struct {
 	Chan  Expr
 	Value Expr
 	Line  int
+	Col   int
 }
 
 // AfterPat: after(d)
 type AfterPat struct {
 	D    Expr
 	Line int
+	Col  int
 }
 
 // ClosedPat: ch.closed()
 type ClosedPat struct {
 	Chan Expr
 	Line int
+	Col  int
 }
 
 // BoolPat: if cond (subject-less boolean arm)
 type BoolPat struct {
 	X    Expr
 	Line int
+	Col  int
 }
 
 type MatchArm struct {
@@ -377,6 +418,7 @@ type MatchArm struct {
 	Body     []Stmt
 	BodyExpr Expr // non-nil = single-expression arm
 	Line     int
+	Col      int
 }
 
 func (*WildcardPat) patNode() {}
