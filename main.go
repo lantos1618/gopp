@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -38,29 +40,44 @@ import (
 //   - comptime functions
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp fmt [-w] <files...>")
+		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp run <input.gopp> | gopp fmt [-w] <files...>")
 		os.Exit(2)
 	}
 	if os.Args[1] == "fmt" {
 		runFmt(os.Args[2:])
 		return
 	}
+	if os.Args[1] == "run" {
+		os.Exit(runRun(os.Args[2:]))
+	}
 	in := os.Args[1]
 	outDir := "gopp-out"
 	if len(os.Args) >= 4 && os.Args[2] == "-o" {
 		outDir = os.Args[3]
 	}
+	if code := compile(in, outDir); code != 0 {
+		os.Exit(code)
+	}
+	fmt.Printf("compiled %s -> %s (cd %s && go run .)\n", in, outDir, outDir)
+}
+
+// compile compiles in — a single file, or the entry of a directory-based
+// package graph when it has imports (§3) — into a runnable Go module in
+// outDir, and returns a process exit code (0 = success). All diagnostics
+// from all passes are collected and printed together; codegen only runs
+// on a clean bill (skeleton §0/§11).
+func compile(in, outDir string) int {
 	src, err := os.ReadFile(in)
 	if err != nil {
-		fatal(err)
+		fmt.Fprintln(os.Stderr, "gopp:", err)
+		return 1
 	}
-	// All diagnostics from all passes are collected and printed together;
-	// codegen only runs on a clean bill (skeleton §0/§11).
 	diags := &Diagnostics{}
 	toks, err := lex(string(src))
 	if err != nil {
 		diagFromError(diags, err)
 		printDiags(diags, string(src))
+		return 1
 	}
 	file, parseDiags := parse(toks)
 	diags.items = append(diags.items, parseDiags.items...)
@@ -68,42 +85,81 @@ func main() {
 		// syntax errors: report them all, but don't run sema on a
 		// partial AST — the follow-on noise helps nobody
 		printDiags(diags, string(src))
+		return 1
 	}
 	if len(file.Imports) > 0 {
 		// directory mode (§3): the input's package is its whole directory
 		root := loadGraph(filepath.Dir(in))
 		checkGraph(root)
 		if printGraphDiags(root) {
-			os.Exit(1)
+			return 1
 		}
 		emitGraph(root, outDir)
-		fmt.Printf("compiled %s -> %s (cd %s && go run .)\n", in, outDir, outDir)
-		return
+		return 0
 	}
 	chk, semDiags := checkImports(file, nil, nil, string(src))
 	diags.items = append(diags.items, semDiags.items...)
-	printDiags(diags, string(src))
+	if printDiags(diags, string(src)) {
+		return 1
+	}
 	goSrc := emit(file, chk)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		fatal(err)
+		fmt.Fprintln(os.Stderr, "gopp:", err)
+		return 1
 	}
 	if err := os.WriteFile(filepath.Join(outDir, "main.go"), []byte(goSrc), 0o644); err != nil {
-		fatal(err)
+		fmt.Fprintln(os.Stderr, "gopp:", err)
+		return 1
 	}
 	writePrelude(outDir)
-	fmt.Printf("compiled %s -> %s (cd %s && go run .)\n", in, outDir, outDir)
+	return 0
+}
+
+// runRun compiles the input to a temp dir and runs it with `go run .`,
+// streaming the child's stdout/stderr through. Returns the child's exit
+// code. Requires the go toolchain on PATH.
+func runRun(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: gopp run <input.gopp>")
+		return 2
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		fmt.Fprintln(os.Stderr, "gopp run: go toolchain not found on PATH")
+		return 1
+	}
+	outDir, err := os.MkdirTemp("", "gopp-run-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gopp:", err)
+		return 1
+	}
+	defer os.RemoveAll(outDir)
+	if code := compile(args[0], outDir); code != 0 {
+		return code
+	}
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = outDir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintln(os.Stderr, "gopp:", err)
+		return 1
+	}
+	return 0
 }
 
 // printDiags prints all collected diagnostics (with source snippets,
-// §11) and exits non-zero if any errors were recorded.
-func printDiags(diags *Diagnostics, src string) {
+// §11) and reports whether any errors were recorded.
+func printDiags(diags *Diagnostics, src string) bool {
 	if len(diags.items) == 0 {
-		return
+		return false
 	}
 	fmt.Fprint(os.Stderr, diags.Render(src))
-	if diags.HasErrors() {
-		os.Exit(1)
-	}
+	return diags.HasErrors()
 }
 
 func fatal(err error) {
