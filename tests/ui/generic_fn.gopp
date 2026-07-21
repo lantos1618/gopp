@@ -1,0 +1,31 @@
+package main
+
+// §8 generic functions: error paths.
+
+func Identity[T](x T) T {
+    return x
+}
+
+func Takes2[A, B](a A, b B) A {
+    return a
+}
+
+func Bad[T](x T) int {
+    return x //~ ERROR expected int, found T
+}
+
+func NoArg[T]() int {
+    return 0
+}
+
+func main() {
+    Identity(1, 2) //~ ERROR Identity takes 1 argument(s), got 2
+    Identity[int, string](1) //~ ERROR Identity takes 1 type argument(s), got 2
+    f := Identity //~ ERROR generic function Identity needs type arguments
+    _ = f
+    var s string = Identity(1) //~ ERROR type argument T inferred as both string and untyped int
+    _ = s
+    Takes2(1) //~ ERROR Takes2 takes 2 argument(s), got 1
+    NoArg() //~ ERROR cannot infer type argument T for NoArg
+}
+

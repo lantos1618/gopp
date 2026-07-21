@@ -130,6 +130,14 @@ func TestEndToEndMeta(t *testing.T) {
 	}
 }
 
+func TestEndToEndGeneric(t *testing.T) {
+	got := compileAndRun(t, "examples/generic.gopp")
+	want := "42\ngo++\ntrue\n1\n7\n9\none 1\n"
+	if got != want {
+		t.Fatalf("generic.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
 // writePkg makes a one-file package in dir/name for loader unit tests.
 func writePkg(t *testing.T, dir, name, src string) {
 	t.Helper()

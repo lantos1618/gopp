@@ -276,6 +276,10 @@ func (e *emitter) emitFunc(fn *FuncDecl) {
 	for _, p := range fn.Params {
 		params = append(params, p.Name+" "+e.typeExprGo(p.Type))
 	}
+	tp := ""
+	if len(fn.TypeParams) > 0 { // §8: Go generics carry the instantiation
+		tp = "[" + strings.Join(fn.TypeParams, " any, ") + " any]"
+	}
 	res := ""
 	switch len(fn.Results) {
 	case 0:
@@ -288,7 +292,7 @@ func (e *emitter) emitFunc(fn *FuncDecl) {
 		}
 		res = " (" + strings.Join(rs, ", ") + ")"
 	}
-	e.s("func %s(%s)%s {\n", fn.Name, strings.Join(params, ", "), res)
+	e.s("func %s%s(%s)%s {\n", fn.Name, tp, strings.Join(params, ", "), res)
 	e.emitStmts(fn.Body.List)
 	e.s("}\n\n")
 }

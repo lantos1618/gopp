@@ -31,11 +31,13 @@ type Field struct {
 }
 
 type FuncDecl struct {
-	Name    string
-	Params  []Field
-	Results []Field // 0 or 1 used in practice
-	Body    *Block
-	Line    int
+	Name       string
+	TypeParams []string // e.g. ["T"]; empty = non-generic (§8)
+	Params     []Field
+	Results    []Field // 0 or 1 used in practice
+	Body       *Block
+	Line       int
+	Col        int
 }
 
 type EnumDecl struct {

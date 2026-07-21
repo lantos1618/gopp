@@ -65,8 +65,9 @@ type tStar struct{ x Type }
 func (t *tStar) String() string { return "*" + t.x.String() }
 
 type tFunc struct {
-	params  []Type
-	results []Type
+	params     []Type
+	results    []Type
+	typeParams []string // §8 generic functions; empty = monomorphic
 }
 
 func (t *tFunc) String() string {
@@ -256,18 +257,19 @@ type ctorTarget struct {
 }
 
 type checker struct {
-	diag        *Diagnostics
-	enums       map[string]*EnumDecl
-	structs     map[string]*StructDecl
-	prelude     map[*EnumDecl]bool // synthetic prelude enums (Result, Option)
-	funcs       map[string]*tFunc
-	ctors       map[string]*ctorTarget
-	ambiguous   map[string]bool
-	globals     *scope
-	cur         *scope
-	curResults  []Type
-	curFuncLine int // declaration line of the function being checked (§11 notes)
-	loopDepth   int
+	diag          *Diagnostics
+	enums         map[string]*EnumDecl
+	structs       map[string]*StructDecl
+	prelude       map[*EnumDecl]bool // synthetic prelude enums (Result, Option)
+	funcs         map[string]*tFunc
+	ctors         map[string]*ctorTarget
+	ambiguous     map[string]bool
+	globals       *scope
+	cur           *scope
+	curResults    []Type
+	curFuncLine   int      // declaration line of the function being checked (§11 notes)
+	curTypeParams []string // §8: type params of the function being checked
+	loopDepth     int
 	// outputs for the emitter (side tables, §1)
 	types       map[Expr]Type
 	resolved    map[Expr]*ctorTarget // idents/call-funs that are variant references
@@ -447,17 +449,20 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 				c.diag.errorf(fn.Line, "duplicate function %s", fn.Name)
 				continue
 			}
-			ft := &tFunc{}
+			c.curTypeParams = fn.TypeParams // T resolves rigidly in the sig
+			ft := &tFunc{typeParams: fn.TypeParams}
 			for _, p := range fn.Params {
 				ft.params = append(ft.params, c.resolveType(p.Type))
 			}
 			for _, r := range fn.Results {
 				ft.results = append(ft.results, c.resolveType(r.Type))
 			}
+			c.curTypeParams = nil
 			c.funcs[fn.Name] = ft
 		}
 	}
-	// pass 2: function bodies
+	// pass 2: function bodies — checked ONCE against rigid type params
+	// (§8: generics are checked against the contract, never per call site)
 	for _, d := range f.Decls {
 		if fn, ok := d.(*FuncDecl); ok {
 			ft := c.funcs[fn.Name]
@@ -466,6 +471,7 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			}
 			c.curResults = ft.results
 			c.curFuncLine = fn.Line // for "expected because of this" notes (§11)
+			c.curTypeParams = fn.TypeParams
 			c.cur = &scope{parent: c.globals, vars: map[string]Type{}}
 			for i, p := range fn.Params {
 				if i < len(ft.params) {
@@ -473,6 +479,7 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 				}
 			}
 			c.checkStmts(fn.Body.List)
+			c.curTypeParams = nil
 		}
 	}
 	// pass 3 (§9): flow checks over the typed bodies
@@ -520,6 +527,11 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 				if tp == t.Name {
 					return tTypeParam{t.Name}
 				}
+			}
+		}
+		for _, tp := range c.curTypeParams { // §8 generic function type params
+			if tp == t.Name {
+				return tTypeParam{t.Name}
 			}
 		}
 		if dot := strings.IndexByte(t.Name, '.'); dot > 0 { // pkg.Type (§3)
@@ -1273,6 +1285,10 @@ func (c *checker) checkIdentValue(ex *Ident) Type {
 		return tbool
 	}
 	if ft, ok := c.funcs[ex.Name]; ok {
+		if len(ft.typeParams) > 0 {
+			c.diag.errorfAt(ex.Line, ex.Col, "generic function %s needs type arguments, e.g. %s[int](...)", ex.Name, ex.Name)
+			return terr
+		}
 		return ft
 	}
 	if ct, ok := c.ctors[ex.Name]; ok {
@@ -1404,6 +1420,9 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 			return c.checkConversion(ex, fun.Name)
 		}
 		if ft, ok := c.funcs[fun.Name]; ok {
+			if len(ft.typeParams) > 0 { // §8: infer the instantiation
+				return c.callGenericFunc(ex, fun.Name, ft, nil, want)
+			}
 			c.checkCallArgs(ex, ft.params)
 			if len(ft.results) > 0 {
 				return ft.results[0]
@@ -1419,8 +1438,15 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 		}
 		return terr
 	case *IndexExpr:
-		// generic constructor instantiation: Ok[int, string](v)
+		// generic instantiation: Identity[int](v), Ok[int, string](v)
 		if id, ok := fun.X.(*Ident); ok {
+			if ft, ok := c.funcs[id.Name]; ok && len(ft.typeParams) > 0 {
+				args := c.resolveTypeArgs(ex, fun)
+				if args == nil {
+					return terr
+				}
+				return c.callGenericFunc(ex, id.Name, ft, args, want)
+			}
 			if ct, ok := c.ctors[id.Name]; ok {
 				args := c.resolveTypeArgs(ex, fun)
 				if args == nil {
@@ -1600,6 +1626,63 @@ func (c *checker) callVariantCtor(ex *CallExpr, key Expr, name string, own *chec
 		c.inferred[key] = args
 	}
 	return et
+}
+
+// callGenericFunc checks a call to a generic function (§8). With explicit
+// type arguments it verifies arity and substitutes; without, it solves
+// the type parameters by pattern-matching the value arguments (the same
+// §8-lite engine as constructor inference), seeded by the expected type.
+// The body was already checked ONCE, rigidly — nothing here rechecks it.
+func (c *checker) callGenericFunc(ex *CallExpr, name string, ft *tFunc, targs []Type, want Type) Type {
+	n := len(ft.typeParams)
+	if len(ex.Args) != len(ft.params) {
+		c.diag.errorfAt(ex.Line, ex.Col, "%s takes %d argument(s), got %d", name, len(ft.params), len(ex.Args))
+		return terr
+	}
+	inferred := false
+	if targs == nil {
+		solved := make([]Type, n)
+		// context pins what it can: var x int = Identity(...)
+		if want != nil && len(ft.results) == 1 {
+			c.matchTypePattern(ft.results[0], want, ft.typeParams, solved, ex.Line, ex.Col)
+		}
+		for i, p := range ft.params {
+			at := c.checkExpr(ex.Args[i])
+			if isErr(at) {
+				continue
+			}
+			c.matchTypePattern(p, at, ft.typeParams, solved, lineOf(ex.Args[i]), colOf(ex.Args[i]))
+		}
+		for i := range solved {
+			if solved[i] == nil {
+				c.diag.errorfAt(ex.Line, ex.Col, "cannot infer type argument %s for %s; use explicit %s[%s](...)",
+					ft.typeParams[i], name, name, strings.Join(ft.typeParams, ", "))
+				return terr
+			}
+			solved[i] = defaultType(solved[i])
+		}
+		targs = solved
+		inferred = true
+	} else if len(targs) != n { // arity (§5)
+		c.diag.errorfAt(ex.Line, ex.Col, "%s takes %d type argument(s), got %d", name, n, len(targs))
+		return terr
+	}
+	for i, p := range ft.params {
+		pt := subst(p, ft.typeParams, targs)
+		if inferred {
+			// args were infer-checked to solve the parameters; verify
+			// against the solved types (literals get adoption + overflow)
+			if _, ok := c.tryAdopt(ex.Args[i], pt); !ok {
+				c.expect(c.types[ex.Args[i]], pt, lineOf(ex.Args[i]), colOf(ex.Args[i]))
+			}
+		} else {
+			c.checkAgainst(ex.Args[i], pt)
+		}
+	}
+	if len(ft.results) == 0 {
+		return tvoid
+	}
+	return subst(ft.results[0], ft.typeParams, targs)
 }
 
 // inferTypeArgs solves a generic constructor's type arguments without a

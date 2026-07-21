@@ -64,10 +64,28 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   allowed.
 - Inference is function-local and annotation-free: `:=` takes the RHS
   type directly (defaulting untyped literals). There are no inference
-  variables, hence no unification engine and no occurs check — they
-  arrive with generic functions (§8), which are deliberately not built
-  yet. Constructor type-argument inference (below) is pattern matching,
-  not unification.
+  variables, hence no unification engine and no occurs check — generic
+  instantiation (below) is pattern matching, not unification.
+
+## Generic functions (§8)
+
+- `func Identity[T](x T) T` — type parameters in brackets after the
+  name. The body is checked ONCE against the rigid parameters: a `T`
+  value may be passed, returned, stored in containers, and put into
+  generic enum instantiations — nothing else (no arithmetic, no
+  comparison, no field access; that needs behaviors, still deferred).
+- Call sites instantiate by inference or explicitly: `Identity(42)`,
+  `Identity[bool](true)`. Inference pattern-matches argument types
+  against parameter patterns (parameters may nest inside
+  enums/maps/slices/chans/pointers), seeded by the expected type, with
+  the same rules as constructor inference: unsolved parameters are an
+  error ("cannot infer type argument T for f"), conflicts diagnose once
+  ("type argument T inferred as both string and untyped int"), untyped
+  literal constraints yield to typed ones.
+- A generic function named without a call is an error ("generic
+  function f needs type arguments") — no uninstantiated function values.
+- Emission maps to Go generics directly (`func Identity[T any](x T) T`),
+  so instantiation and monomorphization are the Go toolchain's job.
 
 ## Generic constructor inference (§8-lite)
 
@@ -244,9 +262,9 @@ drop order) do not apply and are deliberately deleted from the roadmap.
 
 - **§17 identifier interning** — pure performance; at ~4k LOC the win is
   unmeasurable against the churn. Revisit when compile times hurt.
-- **§8 generic functions + behaviors** — the skeleton's own rule: the
-  monomorphic language checks end to end first. This brings unification,
-  deferred obligations, and the occurs check.
+- **§8 behaviors (traits)** — generic functions landed; behaviors, impl
+  tables, and bounds (`T: Comparable`) are the remaining half. With
+  them: operator overloading (§14) and method calls on type params.
 - **§14 operator overloading** — needs behaviors first.
 - **§16 macros** — no macro syntax; top-level comptime blocks (§10
   metaprogramming) cover the code-generation-shaped wants with live AST

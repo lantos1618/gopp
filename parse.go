@@ -229,8 +229,21 @@ func (p *parser) synchronizeStmt() {
 }
 
 func (p *parser) parseFuncDecl() Decl {
-	line := p.next().line // func / fn
+	tk := p.next() // func / fn
 	name := p.expectIdent()
+	var typeParams []string
+	if p.cur().text == "[" { // func Identity[T](x T) T (§8)
+		p.next()
+		for {
+			typeParams = append(typeParams, p.expectIdent())
+			if p.cur().text == "," {
+				p.next()
+				continue
+			}
+			break
+		}
+		p.expect("]")
+	}
 	p.expect("(")
 	params := p.parseFieldList(")")
 	var results []Field
@@ -242,7 +255,7 @@ func (p *parser) parseFuncDecl() Decl {
 	}
 	p.skipNL()
 	body := p.parseBlock()
-	return &FuncDecl{Name: name, Params: params, Results: results, Body: body, Line: line}
+	return &FuncDecl{Name: name, TypeParams: typeParams, Params: params, Results: results, Body: body, Line: tk.line, Col: tk.col}
 }
 
 // parseFieldList parses `a int, b int` / `a, b int` / `int` style lists

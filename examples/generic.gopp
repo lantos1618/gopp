@@ -1,0 +1,52 @@
+package main
+
+// §8: generic functions. Bodies are checked ONCE against rigid type
+// parameters; call sites instantiate by inference (from the expected
+// type and the value arguments) or by explicit type arguments.
+
+enum Pair[A, B] {
+    Pair(a A, b B)
+}
+
+func Identity[T](x T) T {
+    return x
+}
+
+func First[A, B](a A, b B) A {
+    return a
+}
+
+func Wrap[T](x T) Option[T] {
+    return Some[T](x)
+}
+
+func UnwrapOr[T](o Option[T], fallback T) T {
+    return match o {
+        Some(v) -> v
+        None -> fallback
+    }
+}
+
+func MakePair[A, B](a A, b B) Pair[A, B] {
+    return Pair[A, B](a, b)
+}
+
+func Swap[A, B](p Pair[A, B]) Pair[B, A] {
+    return match p {
+        Pair(a, b) -> Pair[B, A](b, a)
+    }
+}
+
+func main() {
+    println(Identity(42))         // T = int, inferred from the argument
+    println(Identity("go++"))     // T = string
+    println(Identity[bool](true)) // explicit type argument
+    println(First(1, "one"))
+    println(UnwrapOr(Wrap(7), 0)) // nested inference: T = int twice
+    println(UnwrapOr(None[int](), 9))
+    s := Swap(MakePair(1, "one"))
+    match s {
+        Pair(b, a) -> println(b, a)
+    }
+}
+

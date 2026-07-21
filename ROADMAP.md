@@ -24,7 +24,7 @@ feature; documented in SPEC.md) · ❌ not done
 | 14 | kind/arity checking | ✅ |
 | 15 | bidirectional check/infer, literal defaulting, blame boundaries | ✅ + untyped constants w/ overflow checks, explicit conversions |
 | 16 | unification: occurs, fuel, invariance, no implicit conv | ⚠️ no-implicit-conv ✅; ctor inference is §8-lite pattern matching, no engine (by design) |
-| 17 | generics checked once against bounds | ⚠️ ctor type-arg inference from context + value args ✅; no generic functions |
+| 17 | generics checked once against bounds | ⚠️ generic functions ✅ (rigid params, call-site inference); bounds need behaviors |
 | 18 | behavior resolution, deferred obligations | ➖ no behaviors |
 | 19 | method lookup order + ambiguity | ⚠️ hardcoded methods (chan, Result); variant ambiguity ✅ |
 | 20 | closure capture analysis | ➖ no closures |
@@ -72,8 +72,9 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
    ~~comptime metaprogramming (§10)~~ ✅ · ~~sema columns (§11)~~ ✅ ·
    ~~LSP v1 (§28)~~ ✅ · ~~CI/README/`gopp run`~~ ✅ ·
    ~~comptime match + string builtins~~ ✅
-2. **§8 generic functions + behaviors** — the flagship: unification
-   (occurs check, fuel), behaviors/impls, deferred obligations.
+2. **§8 behaviors (traits)** — the remaining flagship half: behavior
+   decls, impl tables, bounds on type params (`T: Comparable`),
+   method-call resolution. Unlocks §14 operator overloading.
 3. **§17 interning + §1 integer IDs** — when compile times or LSP make
    them pay; both are wrappers, not rewrites, by design.
 4. **LSP v2** — import-aware analysis, local-var definitions, column
@@ -81,4 +82,4 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
 
 Cancelled: `@derive` (superseded by the better-types program — the
 language fixes the types instead of generating boilerplate over weak
-ones). Full §8 stays deferred per SPEC.md until step 2 lands.
+ones). Behaviors stay deferred per SPEC.md until step 2 lands.
