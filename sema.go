@@ -523,14 +523,14 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 			}
 		}
 		if dot := strings.IndexByte(t.Name, '.'); dot > 0 { // pkg.Type (§3)
-			return c.resolveQualifiedType(t.Name[:dot], t.Name[dot+1:], nil, t.Line)
+			return c.resolveQualifiedType(t.Name[:dot], t.Name[dot+1:], nil, t.Line, t.Col)
 		}
 		if basicTypes[t.Name] {
 			return tBasic{t.Name}
 		}
 		if e, ok := c.enums[t.Name]; ok {
 			if len(e.TypeParams) > 0 {
-				c.diag.errorf(t.Line, "enum %s is generic: use %s[%s]", t.Name, t.Name, strings.Join(e.TypeParams, ", "))
+				c.diag.errorfAt(t.Line, t.Col, "enum %s is generic: use %s[%s]", t.Name, t.Name, strings.Join(e.TypeParams, ", "))
 				return terr
 			}
 			return &tEnum{decl: e}
@@ -538,12 +538,12 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 		if s, ok := c.structs[t.Name]; ok {
 			return &tStruct{decl: s}
 		}
-		c.diag.errorf(t.Line, "undefined type %s", t.Name)
+		c.diag.errorfAt(t.Line, t.Col, "undefined type %s", t.Name)
 		return terr
 	case *IndexType:
 		base, ok := t.X.(*IdentType)
 		if !ok {
-			c.diag.errorf(t.Line, "invalid generic type")
+			c.diag.errorfAt(t.Line, t.Col, "invalid generic type")
 			return terr
 		}
 		var args []Type
@@ -551,15 +551,15 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 			args = append(args, c.resolveTypeIn(a, inEnum))
 		}
 		if dot := strings.IndexByte(base.Name, '.'); dot > 0 { // pkg.Box[T] (§3)
-			return c.resolveQualifiedType(base.Name[:dot], base.Name[dot+1:], args, t.Line)
+			return c.resolveQualifiedType(base.Name[:dot], base.Name[dot+1:], args, t.Line, t.Col)
 		}
 		e, ok := c.enums[base.Name]
 		if !ok {
-			c.diag.errorf(t.Line, "%s is not a generic enum", base.Name)
+			c.diag.errorfAt(t.Line, t.Col, "%s is not a generic enum", base.Name)
 			return terr
 		}
 		if len(e.TypeParams) != len(t.Args) { // arity check (§5)
-			c.diag.errorf(t.Line, "%s takes %d type argument(s), got %d", base.Name, len(e.TypeParams), len(t.Args))
+			c.diag.errorfAt(t.Line, t.Col, "%s takes %d type argument(s), got %d", base.Name, len(e.TypeParams), len(t.Args))
 			return terr
 		}
 		return &tEnum{decl: e, args: args}
@@ -579,31 +579,31 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 // resolveQualifiedType resolves pkg.Name (and pkg.Name[args]) against an
 // imported package's type namespace (§3). Only exported, non-prelude
 // types are visible.
-func (c *checker) resolveQualifiedType(pkg, name string, args []Type, line int) Type {
+func (c *checker) resolveQualifiedType(pkg, name string, args []Type, line, col int) Type {
 	dep, ok := c.imports[pkg]
 	if !ok {
-		c.diag.errorf(line, "undefined package %s", pkg)
+		c.diag.errorfAt(line, col, "undefined package %s", pkg)
 		return terr
 	}
 	if !exported(name) {
-		c.diag.errorf(line, "%s.%s is not exported", pkg, name)
+		c.diag.errorfAt(line, col, "%s.%s is not exported", pkg, name)
 		return terr
 	}
 	if e, ok := dep.enums[name]; ok && !dep.prelude[e] {
 		if len(e.TypeParams) != len(args) { // arity (§5), covers bare pkg.Generic too
-			c.diag.errorf(line, "%s.%s takes %d type argument(s), got %d", pkg, name, len(e.TypeParams), len(args))
+			c.diag.errorfAt(line, col, "%s.%s takes %d type argument(s), got %d", pkg, name, len(e.TypeParams), len(args))
 			return terr
 		}
 		return &tEnum{decl: e, args: args}
 	}
 	if s, ok := dep.structs[name]; ok {
 		if len(args) > 0 {
-			c.diag.errorf(line, "%s.%s is not generic", pkg, name)
+			c.diag.errorfAt(line, col, "%s.%s is not generic", pkg, name)
 			return terr
 		}
 		return &tStruct{decl: s}
 	}
-	c.diag.errorf(line, "undefined type %s.%s", pkg, name)
+	c.diag.errorfAt(line, col, "undefined type %s.%s", pkg, name)
 	return terr
 }
 
@@ -622,12 +622,12 @@ func (c *checker) packageOf(id *Ident) (*checker, bool) {
 func exprToType(e Expr) TypeExpr {
 	switch ex := e.(type) {
 	case *Ident:
-		return &IdentType{Name: ex.Name, Line: ex.Line}
+		return &IdentType{Name: ex.Name, Line: ex.Line, Col: ex.Col}
 	case *SelectorExpr:
 		// pkg.Type as a type argument: parser flattens these in parseType,
 		// but they also arrive via expression parsing (foo.Box[int](...))
 		if id, ok := ex.X.(*Ident); ok {
-			return &IdentType{Name: id.Name + "." + ex.Sel, Line: ex.Line}
+			return &IdentType{Name: id.Name + "." + ex.Sel, Line: ex.Line, Col: ex.Col}
 		}
 		return nil
 	case *IndexExpr:
@@ -635,7 +635,7 @@ func exprToType(e Expr) TypeExpr {
 		if base == nil {
 			return nil
 		}
-		it := &IndexType{X: base, Line: ex.Line}
+		it := &IndexType{X: base, Line: ex.Line, Col: ex.Col}
 		for _, a := range ex.Index {
 			at := exprToType(a)
 			if at == nil {
@@ -666,12 +666,12 @@ func (c *checker) pop() { c.cur = c.cur.parent }
 // declareShort binds a name for :=, enforcing the shadowing policy
 // (§3/§29: allowed across scopes, an error within the same scope) and
 // pointing at the previous declaration when it fires (§11).
-func (c *checker) declareShort(id *Ident, t Type, line int) {
+func (c *checker) declareShort(id *Ident, t Type) {
 	if id.Name == "_" {
 		return // the blank identifier is assignable to, never read
 	}
 	if _, dup := c.cur.vars[id.Name]; dup {
-		d := c.diag.errorfAt(line, 0, "%s redeclared in this scope", id.Name)
+		d := c.diag.errorfAt(id.Line, id.Col, "%s redeclared in this scope", id.Name)
 		if prev, ok := c.cur.lines[id.Name]; ok {
 			d.note(prev, 0, "previous declaration of "+id.Name+" here")
 		}
@@ -680,7 +680,7 @@ func (c *checker) declareShort(id *Ident, t Type, line int) {
 	if c.cur.lines == nil {
 		c.cur.lines = map[string]int{}
 	}
-	c.cur.lines[id.Name] = line
+	c.cur.lines[id.Name] = id.Line
 }
 
 func (c *checker) checkStmt(s Stmt) {
@@ -690,21 +690,21 @@ func (c *checker) checkStmt(s Stmt) {
 		c.checkStmts(st.List)
 		c.pop()
 	case *ForInStmt:
-		c.diag.errorf(st.Line, "for-in is only supported inside comptime blocks")
+		c.diag.errorfAt(st.Line, st.Col, "for-in is only supported inside comptime blocks")
 	case *VarStmt:
 		ty := c.resolveType(st.Type)
 		if st.Init != nil {
 			if te, ok := st.Init.(*TryExpr); ok {
 				rt := c.checkTry(te)
-				c.expect(rt, ty, st.Line)
+				c.expect(rt, ty, te.Line, te.Col)
 			} else {
-				c.checkAgainst(st.Init, ty, st.Line)
+				c.checkAgainst(st.Init, ty)
 			}
 		}
 		c.cur.vars[st.Name] = ty
 	case *AssignStmt:
 		if len(st.Lhs) != len(st.Rhs) {
-			c.diag.errorf(st.Line, "assignment mismatch: %d left, %d right", len(st.Lhs), len(st.Rhs))
+			c.diag.errorfAt(st.Line, st.Col, "assignment mismatch: %d left, %d right", len(st.Lhs), len(st.Rhs))
 			return
 		}
 		for i := range st.Lhs {
@@ -712,7 +712,7 @@ func (c *checker) checkStmt(s Stmt) {
 				// `x := f()?` — only as the direct rhs of a single
 				// assignment; the desugar needs statement position
 				if len(st.Lhs) != 1 || (st.Op != ":=" && st.Op != "=") {
-					c.diag.errorf(te.Line, "? can only be used in a simple := or = assignment")
+					c.diag.errorfAt(te.Line, te.Col, "? can only be used in a simple := or = assignment")
 					c.checkExpr(te.X)
 					continue
 				}
@@ -720,30 +720,30 @@ func (c *checker) checkStmt(s Stmt) {
 				if st.Op == ":=" {
 					id, ok := st.Lhs[i].(*Ident)
 					if !ok {
-						c.diag.errorf(st.Line, "left side of := must be a name")
+						c.diag.errorfAt(st.Line, st.Col, "left side of := must be a name")
 						continue
 					}
-					c.declareShort(id, rt, st.Line)
+					c.declareShort(id, rt)
 				} else {
 					if id, ok := st.Lhs[i].(*Ident); ok && id.Name == "_" {
 						continue
 					}
 					lt := c.checkExpr(st.Lhs[i])
-					c.expect(rt, lt, st.Line)
+					c.expect(rt, lt, te.Line, te.Col)
 				}
 				continue
 			}
 			if st.Op == ":=" {
 				rt := defaultType(c.checkExpr(st.Rhs[i]))
 				if mx, ok := st.Rhs[i].(*MatchExpr); ok && sameType(rt, tvoid) {
-					c.diag.errorf(mx.Line, "match in value context must produce a value in every arm")
+					c.diag.errorfAt(mx.Line, mx.Col, "match in value context must produce a value in every arm")
 				}
 				id, ok := st.Lhs[i].(*Ident)
 				if !ok {
-					c.diag.errorf(st.Line, "left side of := must be a name")
+					c.diag.errorfAt(st.Line, st.Col, "left side of := must be a name")
 					continue
 				}
-				c.declareShort(id, rt, st.Line)
+				c.declareShort(id, rt)
 			} else {
 				// the blank identifier is assignable to, never read
 				if id, ok := st.Lhs[i].(*Ident); ok && id.Name == "_" {
@@ -752,10 +752,10 @@ func (c *checker) checkStmt(s Stmt) {
 				}
 				lt := c.checkExpr(st.Lhs[i])
 				if st.Op == "=" {
-					c.checkAgainst(st.Rhs[i], lt, st.Line)
+					c.checkAgainst(st.Rhs[i], lt)
 				} else { // +=, -=, ...
 					rt := c.checkExpr(st.Rhs[i])
-					c.expect(rt, lt, st.Line)
+					c.expect(rt, lt, lineOf(st.Rhs[i]), colOf(st.Rhs[i]))
 				}
 			}
 		}
@@ -767,7 +767,7 @@ func (c *checker) checkStmt(s Stmt) {
 		}
 	case *IfStmt:
 		ct := c.checkExpr(st.Cond)
-		c.expectBool(ct, st.Line, "if condition")
+		c.expectBool(ct, lineOf(st.Cond), colOf(st.Cond), "if condition")
 		c.child()
 		c.checkStmts(st.Then.List)
 		c.pop()
@@ -781,7 +781,7 @@ func (c *checker) checkStmt(s Stmt) {
 		}
 		if st.Cond != nil {
 			ct := c.checkExpr(st.Cond)
-			c.expectBool(ct, st.Line, "for condition")
+			c.expectBool(ct, lineOf(st.Cond), colOf(st.Cond), "for condition")
 		}
 		if st.Post != nil {
 			c.checkStmt(st.Post)
@@ -797,27 +797,27 @@ func (c *checker) checkStmt(s Stmt) {
 	case *BreakStmt:
 		if st.Label == "loop" {
 			if c.loopDepth == 0 {
-				c.diag.errorf(st.Line, "break loop outside of a loop block")
+				c.diag.errorfAt(st.Line, st.Col, "break loop outside of a loop block")
 			}
 		} else if st.Label != "" {
-			c.diag.errorf(st.Line, "unknown label %s", st.Label)
+			c.diag.errorfAt(st.Line, st.Col, "unknown label %s", st.Label)
 		}
 	case *ReturnStmt:
 		if len(c.curResults) == 0 {
 			if len(st.Results) != 0 {
-				c.diag.errorf(st.Line, "function has no results, return has %d", len(st.Results))
+				c.diag.errorfAt(st.Line, st.Col, "function has no results, return has %d", len(st.Results))
 			}
 			return
 		}
 		if len(st.Results) != len(c.curResults) {
-			c.diag.errorf(st.Line, "return has %d value(s), function declares %d", len(st.Results), len(c.curResults))
+			c.diag.errorfAt(st.Line, st.Col, "return has %d value(s), function declares %d", len(st.Results), len(c.curResults))
 			return
 		}
 		for i, r := range st.Results {
 			// a mismatch here is explained by the signature (§11):
 			// attach "expected because of this" to any new diagnostic
 			before := len(c.diag.items)
-			c.checkAgainst(r, c.curResults[i], st.Line)
+			c.checkAgainst(r, c.curResults[i])
 			for k := before; k < len(c.diag.items); k++ {
 				c.diag.items[k].note(c.curFuncLine, 0, "because of the return type declared here")
 			}
@@ -825,7 +825,7 @@ func (c *checker) checkStmt(s Stmt) {
 	case *IncDecStmt:
 		xt := c.checkExpr(st.X)
 		if !isErr(xt) && !isNumeric(xt) {
-			c.diag.errorf(st.Line, "%s needs a number, got %s", st.Op, xt)
+			c.diag.errorfAt(st.Line, st.Col, "%s needs a number, got %s", st.Op, xt)
 		}
 	}
 }
@@ -907,7 +907,7 @@ func intConstFits(text string, neg bool, t Type) bool {
 
 // expect verifies `from` is assignable to `to`; silent when either side is
 // poisoned (§4) or `from` diverges (tNever unifies with everything).
-func (c *checker) expect(from, to Type, line int) {
+func (c *checker) expect(from, to Type, line, col int) {
 	if sameType(from, to) || isNever(from) {
 		return
 	}
@@ -923,15 +923,15 @@ func (c *checker) expect(from, to Type, line int) {
 			return
 		}
 	}
-	c.diag.errorf(line, "expected %s, found %s", to, from)
+	c.diag.errorfAt(line, col, "expected %s, found %s", to, from)
 }
 
-func (c *checker) expectBool(t Type, line int, what string) {
+func (c *checker) expectBool(t Type, line, col int, what string) {
 	if isErr(t) {
 		return
 	}
 	if !sameType(t, tbool) {
-		c.diag.errorf(line, "%s must be bool, got %s", what, t)
+		c.diag.errorfAt(line, col, "%s must be bool, got %s", what, t)
 	}
 }
 
@@ -941,8 +941,11 @@ func (c *checker) expectBool(t Type, line int, what string) {
 // pushing context downward. Integer/float literals adopt the expected
 // numeric type (literal defaulting, §7); match expressions check every
 // arm against it. Signatures and declarations are the blame boundaries.
-func (c *checker) checkAgainst(e Expr, expected Type, line int) Type {
-	if t, ok := c.tryAdopt(e, expected, line); ok {
+// The blame position is e's own, so the caret lands on the offending
+// expression rather than the enclosing statement (§11).
+func (c *checker) checkAgainst(e Expr, expected Type) Type {
+	line, col := lineOf(e), colOf(e)
+	if t, ok := c.tryAdopt(e, expected); ok {
 		return t
 	}
 	switch ex := e.(type) {
@@ -956,7 +959,7 @@ func (c *checker) checkAgainst(e Expr, expected Type, line int) Type {
 		if ct, ok := c.ctors[ex.Name]; ok && len(ct.enum.TypeParams) > 0 && len(ct.variant.Fields) == 0 {
 			if en, ok2 := expected.(*tEnum); ok2 && en.decl == ct.enum && len(en.args) == len(ct.enum.TypeParams) {
 				if c.ambiguous[ex.Name] {
-					c.diag.errorf(line, "variant name %s is ambiguous (multiple enums)", ex.Name)
+					c.diag.errorfAt(line, col, "variant name %s is ambiguous (multiple enums)", ex.Name)
 					c.types[e] = terr
 					return terr
 				}
@@ -971,7 +974,7 @@ func (c *checker) checkAgainst(e Expr, expected Type, line int) Type {
 		// can infer their type arguments: var r Result[int, string] = Ok(1)
 		t := c.checkCall(ex, expected)
 		c.types[e] = t
-		c.expect(t, expected, line)
+		c.expect(t, expected, line, col)
 		return t
 	case *ComptimeExpr:
 		// evaluate, then range-check the constant against the declared
@@ -981,17 +984,17 @@ func (c *checker) checkAgainst(e Expr, expected Type, line int) Type {
 		if !isErr(t) {
 			if v, ok := c.constVals[ex]; ok && v.kind == ckInt {
 				if b, ok2 := expected.(tBasic); ok2 && isSizedInt(b.name) && !fitsBigInt(v.i, b.name) {
-					c.diag.errorf(line, "constant %s overflows %s", v.i.String(), expected)
+					c.diag.errorfAt(line, col, "constant %s overflows %s", v.i.String(), expected)
 					c.types[e] = terr
 					return terr
 				}
 			}
-			c.expect(t, expected, line)
+			c.expect(t, expected, line, col)
 		}
 		return t
 	}
 	t := c.checkExpr(e)
-	c.expect(t, expected, line)
+	c.expect(t, expected, line, col)
 	return t
 }
 
@@ -999,13 +1002,13 @@ func (c *checker) checkAgainst(e Expr, expected Type, line int) Type {
 // integer/float literals (and signed literals) adopt it, with a
 // compile-time overflow check (§7). ok=false means e is not one of those
 // shapes — the caller falls back to infer + expect.
-func (c *checker) tryAdopt(e Expr, expected Type, line int) (Type, bool) {
+func (c *checker) tryAdopt(e Expr, expected Type) (Type, bool) {
 	if lit, ok := e.(*BasicLit); ok {
 		switch lit.Kind {
 		case kInt:
 			if isNumeric(expected) {
 				if !intConstFits(lit.Value, false, expected) {
-					c.diag.errorf(line, "constant %s overflows %s", lit.Value, expected)
+					c.diag.errorfAt(lit.Line, lit.Col, "constant %s overflows %s", lit.Value, expected)
 					c.types[e] = terr
 					return terr, true
 				}
@@ -1031,7 +1034,7 @@ func (c *checker) tryAdopt(e Expr, expected Type, line int) (Type, bool) {
 						if neg {
 							sign = "-"
 						}
-						c.diag.errorf(line, "constant %s%s overflows %s", sign, lit.Value, expected)
+						c.diag.errorfAt(un.Line, un.Col, "constant %s%s overflows %s", sign, lit.Value, expected)
 						c.types[e] = terr
 						return terr, true
 					}
@@ -1059,7 +1062,7 @@ func (c *checker) checkTry(te *TryExpr) Type {
 	if isErr(xt) {
 		ty = terr
 	} else if en, ok := xt.(*tEnum); !ok || en.decl.Name != "Result" || len(en.args) != 2 {
-		c.diag.errorf(te.Line, "? needs a Result[T, E], got %s", xt)
+		c.diag.errorfAt(te.Line, te.Col, "? needs a Result[T, E], got %s", xt)
 	} else {
 		e := en.args[1]
 		bad := false
@@ -1068,10 +1071,10 @@ func (c *checker) checkTry(te *TryExpr) Type {
 		} else if rt, ok := c.curResults[0].(*tEnum); !ok || rt.decl.Name != "Result" || len(rt.args) != 2 {
 			bad = true
 		} else {
-			c.expect(e, rt.args[1], te.Line) // error types must match
+			c.expect(e, rt.args[1], te.Line, te.Col) // error types must match
 		}
 		if bad {
-			c.diag.errorf(te.Line, "? requires the function to return Result[T, %s]", e)
+			c.diag.errorfAt(te.Line, te.Col, "? requires the function to return Result[T, %s]", e)
 		} else {
 			ty = en.args[0]
 		}
@@ -1114,11 +1117,11 @@ func (c *checker) checkExpr(e Expr) Type {
 		// no implicit conversions (§7): operands must agree
 		switch ex.Op {
 		case "&&", "||":
-			c.expectBool(xt, ex.Line, "left side of "+ex.Op)
-			c.expectBool(yt, ex.Line, "right side of "+ex.Op)
+			c.expectBool(xt, lineOf(ex.X), colOf(ex.X), "left side of "+ex.Op)
+			c.expectBool(yt, lineOf(ex.Y), colOf(ex.Y), "right side of "+ex.Op)
 			ty = tbool
 		case "==", "!=":
-			c.expect(yt, xt, ex.Line)
+			c.expect(yt, xt, ex.Line, ex.Col)
 			ty = tbool
 		case "<", "<=", ">", ">=":
 			if sameType(xt, tstring) && sameType(yt, tstring) {
@@ -1126,7 +1129,7 @@ func (c *checker) checkExpr(e Expr) Type {
 			} else if arithType(xt, yt) != nil {
 				ty = tbool
 			} else {
-				c.diag.errorf(ex.Line, "invalid comparison: %s %s %s (mismatched types)", xt, ex.Op, yt)
+				c.diag.errorfAt(ex.Line, ex.Col, "invalid comparison: %s %s %s (mismatched types)", xt, ex.Op, yt)
 				ty = terr
 			}
 		case "+":
@@ -1135,25 +1138,25 @@ func (c *checker) checkExpr(e Expr) Type {
 			} else if at := arithType(xt, yt); at != nil {
 				ty = at
 			} else {
-				c.diag.errorf(ex.Line, "invalid operation: %s + %s (mismatched types)", xt, yt)
+				c.diag.errorfAt(ex.Line, ex.Col, "invalid operation: %s + %s (mismatched types)", xt, yt)
 				ty = terr
 			}
 		case "%", "&", "|", "^", "&^", "<<", ">>":
 			// integer operands only — no float % or float shifts (§7)
 			if !isInteger(xt) || !isInteger(yt) {
-				c.diag.errorf(ex.Line, "invalid operation: %s %s %s (integer operands only)", xt, ex.Op, yt)
+				c.diag.errorfAt(ex.Line, ex.Col, "invalid operation: %s %s %s (integer operands only)", xt, ex.Op, yt)
 				ty = terr
 			} else if at := arithType(xt, yt); at != nil {
 				ty = at
 			} else {
-				c.diag.errorf(ex.Line, "invalid operation: %s %s %s (mismatched types)", xt, ex.Op, yt)
+				c.diag.errorfAt(ex.Line, ex.Col, "invalid operation: %s %s %s (mismatched types)", xt, ex.Op, yt)
 				ty = terr
 			}
 		default: // -, *, /
 			if at := arithType(xt, yt); at != nil {
 				ty = at
 			} else {
-				c.diag.errorf(ex.Line, "invalid operation: %s %s %s (mismatched types)", xt, ex.Op, yt)
+				c.diag.errorfAt(ex.Line, ex.Col, "invalid operation: %s %s %s (mismatched types)", xt, ex.Op, yt)
 				ty = terr
 			}
 		}
@@ -1172,7 +1175,7 @@ func (c *checker) checkExpr(e Expr) Type {
 				if st, ok := xt.(*tStar); ok {
 					ty = st.x
 				} else {
-					c.diag.errorf(ex.Line, "cannot dereference non-pointer %s", xt)
+					c.diag.errorfAt(ex.Line, ex.Col, "cannot dereference non-pointer %s", xt)
 					ty = terr
 				}
 			default:
@@ -1190,7 +1193,7 @@ func (c *checker) checkExpr(e Expr) Type {
 		if ex.Cap != nil {
 			ct := c.checkExpr(ex.Cap)
 			if !isErr(ct) && !isNumeric(ct) {
-				c.diag.errorf(ex.Line, "channel capacity must be a number, got %s", ct)
+				c.diag.errorfAt(ex.Line, ex.Col, "channel capacity must be a number, got %s", ct)
 			}
 		}
 		if isErr(et) {
@@ -1205,7 +1208,7 @@ func (c *checker) checkExpr(e Expr) Type {
 	case *StructLitExpr:
 		ty = c.checkStructLit(ex)
 	case *TryExpr:
-		c.diag.errorf(ex.Line, "? can only be used directly on the right side of := / = / var, or as a statement")
+		c.diag.errorfAt(ex.Line, ex.Col, "? can only be used directly on the right side of := / = / var, or as a statement")
 		c.checkExpr(ex.X)
 		ty = terr
 	case *ComptimeExpr:
@@ -1274,13 +1277,13 @@ func (c *checker) checkIdentValue(ex *Ident) Type {
 	}
 	if ct, ok := c.ctors[ex.Name]; ok {
 		if c.ambiguous[ex.Name] {
-			c.diag.errorf(ex.Line, "variant name %s is ambiguous (multiple enums)", ex.Name)
+			c.diag.errorfAt(ex.Line, ex.Col, "variant name %s is ambiguous (multiple enums)", ex.Name)
 			return terr
 		}
 		c.resolved[ex] = ct
 		et := &tEnum{decl: ct.enum}
 		if len(ct.enum.TypeParams) > 0 {
-			c.diag.errorf(ex.Line, "%s is generic; use explicit type arguments like %s[..](...)", ex.Name, ex.Name)
+			c.diag.errorfAt(ex.Line, ex.Col, "%s is generic; use explicit type arguments like %s[..](...)", ex.Name, ex.Name)
 			return terr
 		}
 		if len(ct.variant.Fields) == 0 {
@@ -1294,10 +1297,10 @@ func (c *checker) checkIdentValue(ex *Ident) Type {
 		return ft
 	}
 	if _, isPkg := c.imports[ex.Name]; isPkg {
-		c.diag.errorf(ex.Line, "package %s is not a value", ex.Name)
+		c.diag.errorfAt(ex.Line, ex.Col, "package %s is not a value", ex.Name)
 		return terr
 	}
-	d := c.diag.errorfAt(ex.Line, 0, "undefined: %s", ex.Name)
+	d := c.diag.errorfAt(ex.Line, ex.Col, "undefined: %s", ex.Name)
 	if sug := c.suggestName(ex.Name); sug != "" {
 		d.note(0, 0, "did you mean "+sug+"?")
 	}
@@ -1383,14 +1386,14 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 			return tNever{} // diverges: unifies with any expected type (§4)
 		case "len", "cap":
 			if len(ex.Args) != 1 {
-				c.diag.errorf(ex.Line, "%s takes 1 argument", fun.Name)
+				c.diag.errorfAt(ex.Line, ex.Col, "%s takes 1 argument", fun.Name)
 				return terr
 			}
 			c.checkExpr(ex.Args[0])
 			return tint
 		case "append":
 			if len(ex.Args) < 1 {
-				c.diag.errorf(ex.Line, "append needs arguments")
+				c.diag.errorfAt(ex.Line, ex.Col, "append needs arguments")
 				return terr
 			}
 			return c.checkExpr(ex.Args[0])
@@ -1410,7 +1413,7 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 		if ct, ok := c.ctors[fun.Name]; ok {
 			return c.callVariantCtor(ex, fun, fun.Name, c, ct, nil, want)
 		}
-		c.diag.errorf(ex.Line, "undefined function: %s", fun.Name)
+		c.diag.errorfAt(ex.Line, ex.Col, "undefined function: %s", fun.Name)
 		for _, a := range ex.Args {
 			c.checkExpr(a)
 		}
@@ -1431,7 +1434,7 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 			if id, ok2 := sel.X.(*Ident); ok2 {
 				if dep, isPkg := c.packageOf(id); isPkg {
 					if !exported(sel.Sel) {
-						c.diag.errorf(ex.Line, "%s is not exported from package %s", sel.Sel, id.Name)
+						c.diag.errorfAt(ex.Line, ex.Col, "%s is not exported from package %s", sel.Sel, id.Name)
 						return terr
 					}
 					if ct, ok := dep.ctors[sel.Sel]; ok && !dep.prelude[ct.enum] {
@@ -1441,12 +1444,12 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 						}
 						return c.callVariantCtor(ex, sel, sel.Sel, dep, ct, args, want)
 					}
-					c.diag.errorf(ex.Line, "undefined: %s.%s", id.Name, sel.Sel)
+					c.diag.errorfAt(ex.Line, ex.Col, "undefined: %s.%s", id.Name, sel.Sel)
 					return terr
 				}
 			}
 		}
-		c.diag.errorf(ex.Line, "not a generic constructor call")
+		c.diag.errorfAt(ex.Line, ex.Col, "not a generic constructor call")
 		return terr
 	case *SelectorExpr:
 		if id, ok := fun.X.(*Ident); ok {
@@ -1462,43 +1465,43 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 			switch fun.Sel {
 			case "send":
 				if len(ex.Args) != 1 {
-					c.diag.errorf(ex.Line, "send takes 1 argument")
+					c.diag.errorfAt(ex.Line, ex.Col, "send takes 1 argument")
 					return terr
 				}
-				c.checkAgainst(ex.Args[0], ch.elem, ex.Line)
+				c.checkAgainst(ex.Args[0], ch.elem)
 				return tvoid
 			case "recv":
 				if len(ex.Args) != 0 {
-					c.diag.errorf(ex.Line, "recv takes no arguments")
+					c.diag.errorfAt(ex.Line, ex.Col, "recv takes no arguments")
 					return terr
 				}
 				return ch.elem
 			case "close":
 				if len(ex.Args) != 0 {
-					c.diag.errorf(ex.Line, "close takes no arguments")
+					c.diag.errorfAt(ex.Line, ex.Col, "close takes no arguments")
 					return terr
 				}
 				return tvoid
 			case "closed":
-				c.diag.errorf(ex.Line, ".closed() is not supported in v2 (Go channels cannot peek)")
+				c.diag.errorfAt(ex.Line, ex.Col, ".closed() is not supported in v2 (Go channels cannot peek)")
 				return terr
 			}
-			c.diag.errorf(ex.Line, "channels have no method %s", fun.Sel)
+			c.diag.errorfAt(ex.Line, ex.Col, "channels have no method %s", fun.Sel)
 			return terr
 		}
 		if en, ok := xt.(*tEnum); ok && en.decl.Name == "Result" {
 			if fun.Sel == "IsOk" || fun.Sel == "IsErr" {
 				if len(ex.Args) != 0 {
-					c.diag.errorf(ex.Line, "%s takes no arguments", fun.Sel)
+					c.diag.errorfAt(ex.Line, ex.Col, "%s takes no arguments", fun.Sel)
 					return terr
 				}
 				return tbool
 			}
 		}
-		c.diag.errorf(ex.Line, "%s has no method %s", xt, fun.Sel)
+		c.diag.errorfAt(ex.Line, ex.Col, "%s has no method %s", xt, fun.Sel)
 		return terr
 	}
-	c.diag.errorf(ex.Line, "not callable")
+	c.diag.errorfAt(ex.Line, ex.Col, "not callable")
 	return terr
 }
 
@@ -1510,7 +1513,7 @@ func (c *checker) resolveTypeArgs(ex *CallExpr, fun *IndexExpr) []Type {
 	for _, te := range fun.Index {
 		tt := exprToType(te)
 		if tt == nil {
-			c.diag.errorf(ex.Line, "invalid type argument")
+			c.diag.errorfAt(ex.Line, ex.Col, "invalid type argument")
 			bad = true
 			continue
 		}
@@ -1527,7 +1530,7 @@ func (c *checker) resolveTypeArgs(ex *CallExpr, fun *IndexExpr) []Type {
 func (c *checker) checkQualifiedCall(ex *CallExpr, fun *SelectorExpr, id *Ident, dep *checker, want Type) Type {
 	name := fun.Sel
 	if !exported(name) {
-		c.diag.errorf(ex.Line, "%s is not exported from package %s", name, id.Name)
+		c.diag.errorfAt(ex.Line, ex.Col, "%s is not exported from package %s", name, id.Name)
 		return terr
 	}
 	if ft, ok := dep.funcs[name]; ok {
@@ -1541,7 +1544,7 @@ func (c *checker) checkQualifiedCall(ex *CallExpr, fun *SelectorExpr, id *Ident,
 	if ct, ok := dep.ctors[name]; ok && !dep.prelude[ct.enum] {
 		return c.callVariantCtor(ex, fun, name, dep, ct, nil, want)
 	}
-	c.diag.errorf(ex.Line, "undefined: %s.%s", id.Name, name)
+	c.diag.errorfAt(ex.Line, ex.Col, "undefined: %s.%s", id.Name, name)
 	for _, a := range ex.Args {
 		c.checkExpr(a)
 	}
@@ -1550,11 +1553,11 @@ func (c *checker) checkQualifiedCall(ex *CallExpr, fun *SelectorExpr, id *Ident,
 
 func (c *checker) callVariantCtor(ex *CallExpr, key Expr, name string, own *checker, ct *ctorTarget, args []Type, want Type) Type {
 	if own.ambiguous[name] {
-		c.diag.errorf(ex.Line, "variant name %s is ambiguous (multiple enums)", name)
+		c.diag.errorfAt(ex.Line, ex.Col, "variant name %s is ambiguous (multiple enums)", name)
 		return terr
 	}
 	if len(ex.Args) != len(ct.variant.Fields) {
-		c.diag.errorf(ex.Line, "%s takes %d value(s), got %d", name, len(ct.variant.Fields), len(ex.Args))
+		c.diag.errorfAt(ex.Line, ex.Col, "%s takes %d value(s), got %d", name, len(ct.variant.Fields), len(ex.Args))
 		return terr
 	}
 	inferred := false
@@ -1568,11 +1571,11 @@ func (c *checker) callVariantCtor(ex *CallExpr, key Expr, name string, own *chec
 			}
 			inferred = true
 		} else if len(args) != len(ct.enum.TypeParams) { // arity (§5)
-			c.diag.errorf(ex.Line, "%s takes %d type argument(s), got %d", name, len(ct.enum.TypeParams), len(args))
+			c.diag.errorfAt(ex.Line, ex.Col, "%s takes %d type argument(s), got %d", name, len(ct.enum.TypeParams), len(args))
 			return terr
 		}
 	} else if args != nil {
-		c.diag.errorf(ex.Line, "%s is not generic", name)
+		c.diag.errorfAt(ex.Line, ex.Col, "%s is not generic", name)
 		return terr
 	}
 	et := &tEnum{decl: ct.enum, args: args}
@@ -1585,11 +1588,11 @@ func (c *checker) callVariantCtor(ex *CallExpr, key Expr, name string, own *chec
 			// the args were infer-checked to solve the parameters; now
 			// verify them against the solved field types (literals still
 			// get adoption + the overflow check)
-			if _, ok := c.tryAdopt(ex.Args[i], ft, ex.Line); !ok {
-				c.expect(c.types[ex.Args[i]], ft, ex.Line)
+			if _, ok := c.tryAdopt(ex.Args[i], ft); !ok {
+				c.expect(c.types[ex.Args[i]], ft, lineOf(ex.Args[i]), colOf(ex.Args[i]))
 			}
 		} else {
-			c.checkAgainst(ex.Args[i], ft, ex.Line)
+			c.checkAgainst(ex.Args[i], ft)
 		}
 	}
 	c.resolved[key] = ct
@@ -1617,11 +1620,11 @@ func (c *checker) inferTypeArgs(ex *CallExpr, name string, own *checker, ct *cto
 			continue
 		}
 		ft := own.resolveTypeIn(f.Type, ct.enum)
-		c.matchTypePattern(ft, at, ct.enum.TypeParams, solved, ex.Line)
+		c.matchTypePattern(ft, at, ct.enum.TypeParams, solved, lineOf(ex.Args[i]), colOf(ex.Args[i]))
 	}
 	for i := range solved {
 		if solved[i] == nil {
-			c.diag.errorf(ex.Line, "cannot infer type argument %s for %s; use explicit %s[%s](...)",
+			c.diag.errorfAt(ex.Line, ex.Col, "cannot infer type argument %s for %s; use explicit %s[%s](...)",
 				ct.enum.TypeParams[i], name, name, strings.Join(ct.enum.TypeParams, ", "))
 			return nil
 		}
@@ -1635,7 +1638,7 @@ func (c *checker) inferTypeArgs(ex *CallExpr, name string, own *checker, ct *cto
 // pointers) against a concrete argument type, recording solutions. A
 // conflict diagnoses once and poisons the parameter so downstream checks
 // stay silent (§11); an untyped literal constraint yields to a typed one.
-func (c *checker) matchTypePattern(pat, arg Type, params []string, solved []Type, line int) {
+func (c *checker) matchTypePattern(pat, arg Type, params []string, solved []Type, line, col int) {
 	switch p := pat.(type) {
 	case tTypeParam:
 		for i, name := range params {
@@ -1662,7 +1665,7 @@ func (c *checker) matchTypePattern(pat, arg Type, params []string, solved []Type
 					solved[i] = arg
 					return
 				}
-				c.diag.errorf(line, "type argument %s inferred as both %s and %s", p.name, solved[i], arg)
+				c.diag.errorfAt(line, col, "type argument %s inferred as both %s and %s", p.name, solved[i], arg)
 				solved[i] = terr // poison: one conflict, one diagnostic
 			}
 			return
@@ -1670,36 +1673,36 @@ func (c *checker) matchTypePattern(pat, arg Type, params []string, solved []Type
 	case *tEnum:
 		if a, ok := arg.(*tEnum); ok && a.decl == p.decl && len(a.args) == len(p.args) {
 			for i := range p.args {
-				c.matchTypePattern(p.args[i], a.args[i], params, solved, line)
+				c.matchTypePattern(p.args[i], a.args[i], params, solved, line, col)
 			}
 		}
 	case *tMap:
 		if a, ok := arg.(*tMap); ok {
-			c.matchTypePattern(p.k, a.k, params, solved, line)
-			c.matchTypePattern(p.v, a.v, params, solved, line)
+			c.matchTypePattern(p.k, a.k, params, solved, line, col)
+			c.matchTypePattern(p.v, a.v, params, solved, line, col)
 		}
 	case *tSlice:
 		if a, ok := arg.(*tSlice); ok {
-			c.matchTypePattern(p.elem, a.elem, params, solved, line)
+			c.matchTypePattern(p.elem, a.elem, params, solved, line, col)
 		}
 	case *tChan:
 		if a, ok := arg.(*tChan); ok {
-			c.matchTypePattern(p.elem, a.elem, params, solved, line)
+			c.matchTypePattern(p.elem, a.elem, params, solved, line, col)
 		}
 	case *tStar:
 		if a, ok := arg.(*tStar); ok {
-			c.matchTypePattern(p.x, a.x, params, solved, line)
+			c.matchTypePattern(p.x, a.x, params, solved, line, col)
 		}
 	}
 }
 
 func (c *checker) checkCallArgs(ex *CallExpr, params []Type) {
 	if len(ex.Args) != len(params) {
-		c.diag.errorf(ex.Line, "expected %d argument(s), got %d", len(params), len(ex.Args))
+		c.diag.errorfAt(ex.Line, ex.Col, "expected %d argument(s), got %d", len(params), len(ex.Args))
 		return
 	}
 	for i := range ex.Args {
-		c.checkAgainst(ex.Args[i], params[i], ex.Line)
+		c.checkAgainst(ex.Args[i], params[i])
 	}
 }
 
@@ -1709,7 +1712,7 @@ func (c *checker) checkCallArgs(ex *CallExpr, params []Type) {
 func (c *checker) checkConversion(ex *CallExpr, name string) Type {
 	to := tBasic{name}
 	if len(ex.Args) != 1 {
-		c.diag.errorf(ex.Line, "conversion to %s takes 1 argument, got %d", name, len(ex.Args))
+		c.diag.errorfAt(ex.Line, ex.Col, "conversion to %s takes 1 argument, got %d", name, len(ex.Args))
 		for _, a := range ex.Args {
 			c.checkExpr(a)
 		}
@@ -1717,7 +1720,7 @@ func (c *checker) checkConversion(ex *CallExpr, name string) Type {
 	}
 	// a literal converts directly, with the overflow check — and only
 	// when the target is numeric, so legality is still enforced below
-	if t, ok := c.tryAdopt(ex.Args[0], to, ex.Line); ok {
+	if t, ok := c.tryAdopt(ex.Args[0], to); ok {
 		return t // terr on a failed overflow check: poison, don't re-diagnose
 	}
 	from := defaultType(c.checkExpr(ex.Args[0]))
@@ -1733,10 +1736,10 @@ func (c *checker) checkConversion(ex *CallExpr, name string) Type {
 		(sameType(from, tstring) && sameType(to, trune)):
 		// rune <-> string
 	case sameType(to, tstring):
-		c.diag.errorf(ex.Line, "cannot convert %s to string (did you mean string(rune(...))?)", from)
+		c.diag.errorfAt(ex.Line, ex.Col, "cannot convert %s to string (did you mean string(rune(...))?)", from)
 		return terr
 	default:
-		c.diag.errorf(ex.Line, "cannot convert %s to %s", from, to)
+		c.diag.errorfAt(ex.Line, ex.Col, "cannot convert %s to %s", from, to)
 		return terr
 	}
 	return to
@@ -1751,7 +1754,7 @@ func (c *checker) checkStructLit(ex *StructLitExpr) Type {
 	st, ok := rt.(*tStruct)
 	if !ok {
 		if !isErr(rt) {
-			c.diag.errorf(ex.Line, "composite literal of non-struct type %s", rt)
+			c.diag.errorfAt(ex.Line, ex.Col, "composite literal of non-struct type %s", rt)
 		}
 		return terr
 	}
@@ -1762,38 +1765,38 @@ func (c *checker) checkStructLit(ex *StructLitExpr) Type {
 	for _, fv := range ex.Fields {
 		if fv.Name == "" {
 			if len(seen) > 0 {
-				c.diag.errorf(fv.Line, "cannot mix positional and keyed fields")
+				c.diag.errorfAt(fv.Line, fv.Col, "cannot mix positional and keyed fields")
 				mixed = true
 				c.checkExpr(fv.Value)
 				continue
 			}
 			if positional >= len(d.Fields) {
-				c.diag.errorf(fv.Line, "too many values in %s literal (%d fields)", d.Name, len(d.Fields))
+				c.diag.errorfAt(fv.Line, fv.Col, "too many values in %s literal (%d fields)", d.Name, len(d.Fields))
 				c.checkExpr(fv.Value)
 				continue
 			}
-			c.checkAgainst(fv.Value, c.resolveFieldType(d, d.Fields[positional].Type), fv.Line)
+			c.checkAgainst(fv.Value, c.resolveFieldType(d, d.Fields[positional].Type))
 			positional++
 			continue
 		}
 		if positional > 0 {
-			c.diag.errorf(fv.Line, "cannot mix positional and keyed fields")
+			c.diag.errorfAt(fv.Line, fv.Col, "cannot mix positional and keyed fields")
 			mixed = true
 		}
 		f := structField(d, fv.Name)
 		if f == nil {
-			c.diag.errorf(fv.Line, "%s has no field %s", d.Name, fv.Name)
+			c.diag.errorfAt(fv.Line, fv.Col, "%s has no field %s", d.Name, fv.Name)
 			c.checkExpr(fv.Value)
 			continue
 		}
 		if seen[fv.Name] {
-			c.diag.errorf(fv.Line, "duplicate field %s in literal", fv.Name)
+			c.diag.errorfAt(fv.Line, fv.Col, "duplicate field %s in literal", fv.Name)
 		}
 		seen[fv.Name] = true
-		c.checkAgainst(fv.Value, c.resolveFieldType(d, f.Type), fv.Line)
+		c.checkAgainst(fv.Value, c.resolveFieldType(d, f.Type))
 	}
 	if !mixed && positional > 0 && positional != len(d.Fields) {
-		c.diag.errorf(ex.Line, "too few values in %s literal: %d of %d fields", d.Name, positional, len(d.Fields))
+		c.diag.errorfAt(ex.Line, ex.Col, "too few values in %s literal: %d of %d fields", d.Name, positional, len(d.Fields))
 	}
 	return st
 }
@@ -1821,7 +1824,7 @@ func (c *checker) checkSelector(ex *SelectorExpr) Type {
 	if st, ok := xt.(*tStruct); ok {
 		f := structField(st.decl, ex.Sel)
 		if f == nil {
-			c.diag.errorf(ex.Line, "%s has no field %s", xt, ex.Sel)
+			c.diag.errorfAt(ex.Line, ex.Col, "%s has no field %s", xt, ex.Sel)
 			return terr
 		}
 		return c.resolveFieldType(st.decl, f.Type)
@@ -1831,7 +1834,7 @@ func (c *checker) checkSelector(ex *SelectorExpr) Type {
 			return &tFunc{results: []Type{tbool}}
 		}
 	}
-	c.diag.errorf(ex.Line, "%s has no field or method %s", xt, ex.Sel)
+	c.diag.errorfAt(ex.Line, ex.Col, "%s has no field or method %s", xt, ex.Sel)
 	return terr
 }
 
@@ -1840,7 +1843,7 @@ func (c *checker) checkSelector(ex *SelectorExpr) Type {
 func (c *checker) checkQualifiedValue(ex *SelectorExpr, id *Ident, dep *checker) Type {
 	name := ex.Sel
 	if !exported(name) {
-		c.diag.errorf(ex.Line, "%s is not exported from package %s", name, id.Name)
+		c.diag.errorfAt(ex.Line, ex.Col, "%s is not exported from package %s", name, id.Name)
 		return terr
 	}
 	if ft, ok := dep.funcs[name]; ok {
@@ -1849,11 +1852,11 @@ func (c *checker) checkQualifiedValue(ex *SelectorExpr, id *Ident, dep *checker)
 	}
 	if ct, ok := dep.ctors[name]; ok && !dep.prelude[ct.enum] {
 		if dep.ambiguous[name] {
-			c.diag.errorf(ex.Line, "variant name %s.%s is ambiguous (multiple enums)", id.Name, name)
+			c.diag.errorfAt(ex.Line, ex.Col, "variant name %s.%s is ambiguous (multiple enums)", id.Name, name)
 			return terr
 		}
 		if len(ct.enum.TypeParams) > 0 {
-			c.diag.errorf(ex.Line, "%s.%s is generic; use explicit type arguments like %s.%s[..](...)", id.Name, name, id.Name, name)
+			c.diag.errorfAt(ex.Line, ex.Col, "%s.%s is generic; use explicit type arguments like %s.%s[..](...)", id.Name, name, id.Name, name)
 			return terr
 		}
 		c.resolved[ex] = ct
@@ -1867,7 +1870,7 @@ func (c *checker) checkQualifiedValue(ex *SelectorExpr, id *Ident, dep *checker)
 		}
 		return ft
 	}
-	c.diag.errorf(ex.Line, "undefined: %s.%s", id.Name, name)
+	c.diag.errorfAt(ex.Line, ex.Col, "undefined: %s.%s", id.Name, name)
 	return terr
 }
 
@@ -1879,21 +1882,21 @@ func (c *checker) checkIndex(ex *IndexExpr) Type {
 		return terr
 	}
 	if len(ex.Index) != 1 {
-		c.diag.errorf(ex.Line, "expected 1 index")
+		c.diag.errorfAt(ex.Line, ex.Col, "expected 1 index")
 		return terr
 	}
 	switch t := xt.(type) {
 	case *tMap:
-		c.checkAgainst(ex.Index[0], t.k, ex.Line)
+		c.checkAgainst(ex.Index[0], t.k)
 		return t.v
 	case *tSlice:
 		it := c.checkExpr(ex.Index[0])
 		if !isErr(it) && !isNumeric(it) {
-			c.diag.errorf(ex.Line, "slice index must be a number, got %s", it)
+			c.diag.errorfAt(ex.Line, ex.Col, "slice index must be a number, got %s", it)
 		}
 		return t.elem
 	}
-	c.diag.errorf(ex.Line, "cannot index %s", xt)
+	c.diag.errorfAt(ex.Line, ex.Col, "cannot index %s", xt)
 	return terr
 }
 
@@ -1968,17 +1971,42 @@ func patLine(p Pattern) int {
 	return 0
 }
 
+// patCol is patLine for columns (§11 carets on pattern diagnostics).
+func patCol(p Pattern) int {
+	switch pt := p.(type) {
+	case *WildcardPat:
+		return pt.Col
+	case *IdentPat:
+		return pt.Col
+	case *LiteralPat:
+		return pt.Col
+	case *VariantPat:
+		return pt.Col
+	case *RecvPat:
+		return pt.Col
+	case *SendPat:
+		return pt.Col
+	case *AfterPat:
+		return pt.Col
+	case *ClosedPat:
+		return pt.Col
+	case *BoolPat:
+		return pt.Col
+	}
+	return 0
+}
+
 // checkArmBody checks one arm body; in CHECK mode (want != nil) a
 // single-expression arm is verified against the expected type.
 func (c *checker) checkArmBody(a *MatchArm, want Type) Type {
 	if a.BodyExpr != nil {
 		if want != nil && !isErr(want) {
-			return c.checkAgainst(a.BodyExpr, want, a.Line)
+			return c.checkAgainst(a.BodyExpr, want)
 		}
 		return c.checkExpr(a.BodyExpr)
 	}
 	if want != nil && !isErr(want) {
-		c.diag.errorf(a.Line, "match in value context must produce a value in every arm")
+		c.diag.errorfAt(a.Line, a.Col, "match in value context must produce a value in every arm")
 	}
 	c.child()
 	c.checkStmts(a.Body)
@@ -1988,7 +2016,7 @@ func (c *checker) checkArmBody(a *MatchArm, want Type) Type {
 
 // unifyArms merges arm result types (§7): tError and tNever are absorbed
 // so a poisoned or diverging arm never masks the real result type.
-func (c *checker) unifyArms(cur, next Type, line int) Type {
+func (c *checker) unifyArms(cur, next Type, a *MatchArm) Type {
 	if cur == nil {
 		return next
 	}
@@ -2015,7 +2043,7 @@ func (c *checker) unifyArms(cur, next Type, line int) Type {
 		return cur
 	}
 	if !sameType(cur, next) {
-		c.diag.errorf(line, "match arms produce different types (%s vs %s)", cur, next)
+		c.diag.errorfAt(a.Line, a.Col, "match arms produce different types (%s vs %s)", cur, next)
 	}
 	return cur
 }
@@ -2044,15 +2072,15 @@ func (c *checker) checkMatchSubject(ex *MatchExpr, want Type) Type {
 		case *VariantPat:
 			if !isEnum {
 				if !isErr(st) {
-					c.diag.errorf(patLine(p), "variant pattern %s on non-enum subject %s", p.Name, st)
+					c.diag.errorfAt(patLine(p), patCol(p), "variant pattern %s on non-enum subject %s", p.Name, st)
 				}
 			} else {
 				v := findVariant(en.decl, p.Name)
 				if v == nil {
-					c.diag.errorf(patLine(p), "%s has no variant %s", en, p.Name)
+					c.diag.errorfAt(patLine(p), patCol(p), "%s has no variant %s", en, p.Name)
 				} else {
 					if len(p.Bindings) != len(v.Fields) {
-						c.diag.errorf(patLine(p), "%s has %d field(s), pattern binds %d", p.Name, len(v.Fields), len(p.Bindings))
+						c.diag.errorfAt(patLine(p), patCol(p), "%s has %d field(s), pattern binds %d", p.Name, len(v.Fields), len(p.Bindings))
 					}
 					if catchAll || covered[p.Name] {
 						c.diag.warnf(patLine(p), "unreachable pattern")
@@ -2073,7 +2101,7 @@ func (c *checker) checkMatchSubject(ex *MatchExpr, want Type) Type {
 			if isEnum && findVariant(en.decl, p.Name) != nil {
 				v := findVariant(en.decl, p.Name)
 				if len(v.Fields) > 0 {
-					c.diag.errorf(patLine(p), "%s carries data; use %s(...) in the pattern", p.Name, p.Name)
+					c.diag.errorfAt(patLine(p), patCol(p), "%s carries data; use %s(...) in the pattern", p.Name, p.Name)
 				}
 				if catchAll || covered[p.Name] {
 					c.diag.warnf(patLine(p), "unreachable pattern")
@@ -2095,7 +2123,7 @@ func (c *checker) checkMatchSubject(ex *MatchExpr, want Type) Type {
 			}
 		case *LiteralPat:
 			lt := c.checkExpr(p.X)
-			c.expect(lt, st, patLine(p))
+			c.expect(lt, st, patLine(p), patCol(p))
 			if catchAll {
 				c.diag.warnf(patLine(p), "unreachable pattern")
 			}
@@ -2107,15 +2135,15 @@ func (c *checker) checkMatchSubject(ex *MatchExpr, want Type) Type {
 				seenLits[key] = true
 			}
 		case *BoolPat:
-			c.diag.errorf(patLine(p), "'if' arms need a subject-less match")
+			c.diag.errorfAt(patLine(p), patCol(p), "'if' arms need a subject-less match")
 		default:
-			c.diag.errorf(patLine(p), "channel arm in a match with a subject")
+			c.diag.errorfAt(patLine(p), patCol(p), "channel arm in a match with a subject")
 		}
 		if a.Guard != nil {
 			gt := c.checkExpr(a.Guard)
-			c.expectBool(gt, a.Line, "guard")
+			c.expectBool(gt, lineOf(a.Guard), colOf(a.Guard), "guard")
 		}
-		resultT = c.unifyArms(resultT, c.checkArmBody(a, want), a.Line)
+		resultT = c.unifyArms(resultT, c.checkArmBody(a, want), a)
 		c.pop()
 	}
 	if isEnum && !hasWild {
@@ -2126,11 +2154,11 @@ func (c *checker) checkMatchSubject(ex *MatchExpr, want Type) Type {
 			}
 		}
 		if len(missing) > 0 {
-			c.diag.errorf(ex.Line, "non-exhaustive match on %s: missing %s", en, strings.Join(missing, ", "))
+			c.diag.errorfAt(ex.Line, ex.Col, "non-exhaustive match on %s: missing %s", en, strings.Join(missing, ", "))
 		}
 	}
 	if !isEnum && !hasWild && !isErr(st) {
-		c.diag.errorf(ex.Line, "match on %s needs a _ arm", st)
+		c.diag.errorfAt(ex.Line, ex.Col, "match on %s needs a _ arm", st)
 	}
 	if resultT == nil {
 		resultT = tvoid
@@ -2140,7 +2168,7 @@ func (c *checker) checkMatchSubject(ex *MatchExpr, want Type) Type {
 
 func (c *checker) checkMatchSelect(ex *MatchExpr, want Type) Type {
 	if ex.Subject != nil {
-		c.diag.errorf(ex.Line, "channel arms need a subject-less match")
+		c.diag.errorfAt(ex.Line, ex.Col, "channel arms need a subject-less match")
 	}
 	var resultT Type
 	for i := range ex.Arms {
@@ -2154,30 +2182,30 @@ func (c *checker) checkMatchSelect(ex *MatchExpr, want Type) Type {
 					c.cur.vars[p.Bind] = ch.elem
 				}
 			} else if !isErr(ct) {
-				c.diag.errorf(patLine(p), "recv on non-channel %s", ct)
+				c.diag.errorfAt(patLine(p), patCol(p), "recv on non-channel %s", ct)
 			}
 		case *SendPat:
 			ct := c.checkExpr(p.Chan)
 			if ch, ok := ct.(*tChan); ok {
-				c.checkAgainst(p.Value, ch.elem, patLine(p))
+				c.checkAgainst(p.Value, ch.elem)
 			} else if !isErr(ct) {
-				c.diag.errorf(patLine(p), "send on non-channel %s", ct)
+				c.diag.errorfAt(patLine(p), patCol(p), "send on non-channel %s", ct)
 			}
 		case *AfterPat:
 			dt := c.checkExpr(p.D)
 			if !isErr(dt) && !isNumeric(dt) {
-				c.diag.errorf(patLine(p), "after() duration must be numeric, got %s", dt)
+				c.diag.errorfAt(patLine(p), patCol(p), "after() duration must be numeric, got %s", dt)
 			}
 		case *ClosedPat:
-			c.diag.errorf(patLine(p), ".closed() arms are not supported in v2 (Go channels cannot peek)")
+			c.diag.errorfAt(patLine(p), patCol(p), ".closed() arms are not supported in v2 (Go channels cannot peek)")
 		case *WildcardPat:
 		default:
-			c.diag.errorf(patLine(p), "cannot mix channel arms with value/enum arms")
+			c.diag.errorfAt(patLine(p), patCol(p), "cannot mix channel arms with value/enum arms")
 		}
 		if a.Guard != nil {
-			c.diag.errorf(a.Line, "guards on channel arms are not supported in v2")
+			c.diag.errorfAt(a.Line, a.Col, "guards on channel arms are not supported in v2")
 		}
-		resultT = c.unifyArms(resultT, c.checkArmBody(a, want), a.Line)
+		resultT = c.unifyArms(resultT, c.checkArmBody(a, want), a)
 		c.pop()
 	}
 	if resultT == nil {
@@ -2198,19 +2226,19 @@ func (c *checker) checkMatchBool(ex *MatchExpr, want Type) Type {
 				c.diag.warnf(patLine(p), "unreachable pattern")
 			}
 			bt := c.checkExpr(p.X)
-			c.expectBool(bt, patLine(p), "boolean arm")
+			c.expectBool(bt, lineOf(p.X), colOf(p.X), "boolean arm")
 		case *WildcardPat:
 			if catchAll {
 				c.diag.warnf(patLine(p), "unreachable pattern")
 			}
 			catchAll = true
 		default:
-			c.diag.errorf(patLine(p), "subject-less match arms must be channel patterns, 'if' conditions, or '_'")
+			c.diag.errorfAt(patLine(p), patCol(p), "subject-less match arms must be channel patterns, 'if' conditions, or '_'")
 		}
 		if a.Guard != nil {
-			c.diag.errorf(a.Line, "guards on boolean arms are not supported")
+			c.diag.errorfAt(a.Line, a.Col, "guards on boolean arms are not supported")
 		}
-		resultT = c.unifyArms(resultT, c.checkArmBody(a, want), a.Line)
+		resultT = c.unifyArms(resultT, c.checkArmBody(a, want), a)
 		c.pop()
 	}
 	if resultT == nil {

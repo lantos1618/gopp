@@ -16,17 +16,33 @@ func main() {
     println(adm)
 }
 `
-	want := `line 3: error: expected int, found string
+	want := `line 3:12: error: expected int, found string
   3 |     return "nope"
+    |            ^
   = note: because of the return type declared here (line 2)
   2 | func add(a int, b int) int {
-line 7: error: x redeclared in this scope
+line 7:5: error: x redeclared in this scope
   7 |     x := 2
+    |     ^
   = note: previous declaration of x here (line 6)
   6 |     x := 1
-line 8: error: undefined: adm
+line 8:13: error: undefined: adm
   8 |     println(adm)
+    |             ^
   = note: did you mean add?
+`
+	if got := runUIFile(src).Render(src); got != want {
+		t.Fatalf("Render mismatch:\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestRenderCaretTypeMismatch pins a caret on the classic sema type
+// mismatch: the blame lands on the offending expression, not the line.
+func TestRenderCaretTypeMismatch(t *testing.T) {
+	src := "package main\nfunc main() {\n    var x string = 5\n}\n"
+	want := `line 3:20: error: expected string, found untyped int
+  3 |     var x string = 5
+    |                    ^
 `
 	if got := runUIFile(src).Render(src); got != want {
 		t.Fatalf("Render mismatch:\n got:\n%s\nwant:\n%s", got, want)

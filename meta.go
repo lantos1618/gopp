@@ -402,7 +402,7 @@ func (c *checker) evalComptimeDecls(f *File) {
 			continue
 		}
 		if fl, _ := mc.execStmts(cd.Body.List, env); fl.returned {
-			c.diag.errorf(cd.Line, "return outside a comptime function")
+			c.diag.errorfAt(cd.Line, cd.Col, "return outside a comptime function")
 		}
 	}
 }

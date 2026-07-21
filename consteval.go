@@ -93,6 +93,38 @@ func lineOf(e Expr) int {
 	return 0
 }
 
+// colOf is lineOf for columns (§11): the caret position of a diagnostic
+// attached to an arbitrary expression node.
+func colOf(e Expr) int {
+	switch ex := e.(type) {
+	case *BasicLit:
+		return ex.Col
+	case *Ident:
+		return ex.Col
+	case *BinaryExpr:
+		return ex.Col
+	case *UnaryExpr:
+		return ex.Col
+	case *CallExpr:
+		return ex.Col
+	case *ComptimeExpr:
+		return ex.Col
+	case *SelectorExpr:
+		return ex.Col
+	case *IndexExpr:
+		return ex.Col
+	case *MatchExpr:
+		return ex.Col
+	case *StructLitExpr:
+		return ex.Col
+	case *MakeChanExpr:
+		return ex.Col
+	case *TryExpr:
+		return ex.Col
+	}
+	return 0
+}
+
 // checkComptime types the inner expression (normal rules, so c.types is
 // fully populated), then evaluates it and records the constant in the
 // constVals side table for the emitter. The result type is the inner
@@ -111,7 +143,7 @@ func (c *checker) checkComptime(ex *ComptimeExpr) Type {
 	}
 	c.constVals[ex] = v
 	if _, untyped := inner.(tUntypedInt); untyped && v.kind == ckInt && !fitsBigInt(v.i, "int") {
-		c.diag.errorf(ex.Line, "constant %s overflows int", v.i.String())
+		c.diag.errorfAt(ex.Line, ex.Col, "constant %s overflows int", v.i.String())
 		return terr
 	}
 	return inner
@@ -123,7 +155,7 @@ func (c *checker) checkComptime(ex *ComptimeExpr) Type {
 func (c *checker) constEval(e Expr, fuel *int) (constVal, bool) {
 	*fuel--
 	if *fuel <= 0 {
-		c.diag.errorf(lineOf(e), "comptime evaluation limit reached")
+		c.diag.errorfAt(lineOf(e), colOf(e), "comptime evaluation limit reached")
 		return constVal{}, false
 	}
 	switch ex := e.(type) {
@@ -132,29 +164,29 @@ func (c *checker) constEval(e Expr, fuel *int) (constVal, bool) {
 		case kInt:
 			v, ok := new(big.Int).SetString(ex.Value, 0)
 			if !ok {
-				return c.constFail(ex.Line, "invalid integer constant %s", ex.Value)
+				return c.constFail(ex.Line, ex.Col, "invalid integer constant %s", ex.Value)
 			}
 			return intVal(v), true
 		case kFloat:
 			f, err := strconv.ParseFloat(ex.Value, 64)
 			if err != nil {
-				return c.constFail(ex.Line, "invalid float constant %s", ex.Value)
+				return c.constFail(ex.Line, ex.Col, "invalid float constant %s", ex.Value)
 			}
 			return floatVal(f), true
 		case kString:
 			s, err := strconv.Unquote(ex.Value)
 			if err != nil {
-				return c.constFail(ex.Line, "invalid string constant %s", ex.Value)
+				return c.constFail(ex.Line, ex.Col, "invalid string constant %s", ex.Value)
 			}
 			return constVal{kind: ckString, s: s}, true
 		case kRune:
 			s, err := strconv.Unquote(ex.Value)
 			if err != nil {
-				return c.constFail(ex.Line, "invalid rune constant %s", ex.Value)
+				return c.constFail(ex.Line, ex.Col, "invalid rune constant %s", ex.Value)
 			}
 			r := []rune(s)
 			if len(r) != 1 {
-				return c.constFail(ex.Line, "invalid rune constant %s", ex.Value)
+				return c.constFail(ex.Line, ex.Col, "invalid rune constant %s", ex.Value)
 			}
 			return constVal{kind: ckRune, i: big.NewInt(int64(r[0]))}, true
 		}
@@ -185,7 +217,7 @@ func (c *checker) constEval(e Expr, fuel *int) (constVal, bool) {
 				return constVal{kind: ckDuration, i: big.NewInt(60_000_000_000)}, true
 			}
 		}
-		return c.constFail(ex.Line, "%s is not a constant", ex.Name)
+		return c.constFail(ex.Line, ex.Col, "%s is not a constant", ex.Name)
 	case *ComptimeExpr:
 		return c.constEval(ex.X, fuel)
 	case *UnaryExpr:
@@ -207,11 +239,11 @@ func (c *checker) constEval(e Expr, fuel *int) (constVal, bool) {
 	case *CallExpr:
 		return c.constCall(ex, fuel)
 	}
-	return c.constFail(lineOf(e), "not a constant expression")
+	return c.constFail(lineOf(e), colOf(e), "not a constant expression")
 }
 
-func (c *checker) constFail(line int, format string, args ...interface{}) (constVal, bool) {
-	c.diag.errorf(line, format, args...)
+func (c *checker) constFail(line, col int, format string, args ...interface{}) (constVal, bool) {
+	c.diag.errorfAt(line, col, format, args...)
 	return constVal{}, false
 }
 
@@ -239,7 +271,7 @@ func (c *checker) constUnary(ex *UnaryExpr, x constVal) (constVal, bool) {
 			return c.constRange(ex, intVal(new(big.Int).Not(x.i)))
 		}
 	}
-	return c.constFail(ex.Line, "not a constant expression: %s", ex.Op)
+	return c.constFail(ex.Line, ex.Col, "not a constant expression: %s", ex.Op)
 }
 
 // constRange applies the §29 overflow rule: when the expression node's
@@ -249,7 +281,7 @@ func (c *checker) constRange(ex Expr, v constVal) (constVal, bool) {
 		return v, true
 	}
 	if b, ok := c.types[ex].(tBasic); ok && isSizedInt(b.name) && !fitsBigInt(v.i, b.name) {
-		return c.constFail(lineOf(ex), "constant %s overflows %s", v.i.String(), b.name)
+		return c.constFail(lineOf(ex), colOf(ex), "constant %s overflows %s", v.i.String(), b.name)
 	}
 	return v, true
 }
@@ -276,7 +308,7 @@ func (c *checker) constBinary(ex *BinaryExpr, x, y constVal) (constVal, bool) {
 		case "!=":
 			return boolVal(x.b != y.b), true
 		}
-		return c.constFail(ex.Line, "invalid operation: bool %s bool in constant expression", ex.Op)
+		return c.constFail(ex.Line, ex.Col, "invalid operation: bool %s bool in constant expression", ex.Op)
 	}
 	if x.kind == ckString && y.kind == ckString {
 		switch ex.Op {
@@ -295,7 +327,7 @@ func (c *checker) constBinary(ex *BinaryExpr, x, y constVal) (constVal, bool) {
 		case ">=":
 			return boolVal(x.s >= y.s), true
 		}
-		return c.constFail(ex.Line, "invalid operation: string %s string in constant expression", ex.Op)
+		return c.constFail(ex.Line, ex.Col, "invalid operation: string %s string in constant expression", ex.Op)
 	}
 	if isConstNum(x) && isConstNum(y) {
 		if x.kind == ckFloat || y.kind == ckFloat {
@@ -303,7 +335,7 @@ func (c *checker) constBinary(ex *BinaryExpr, x, y constVal) (constVal, bool) {
 		}
 		return c.constBinaryInt(ex, x, y)
 	}
-	return c.constFail(ex.Line, "not a constant expression")
+	return c.constFail(ex.Line, ex.Col, "not a constant expression")
 }
 
 func (c *checker) constBinaryFloat(ex *BinaryExpr, x, y float64) (constVal, bool) {
@@ -316,7 +348,7 @@ func (c *checker) constBinaryFloat(ex *BinaryExpr, x, y float64) (constVal, bool
 		return floatVal(x * y), true
 	case "/":
 		if y == 0 {
-			return c.constFail(ex.Line, "division by zero in constant expression")
+			return c.constFail(ex.Line, ex.Col, "division by zero in constant expression")
 		}
 		return floatVal(x / y), true
 	case "==":
@@ -332,7 +364,7 @@ func (c *checker) constBinaryFloat(ex *BinaryExpr, x, y float64) (constVal, bool
 	case ">=":
 		return boolVal(x >= y), true
 	}
-	return c.constFail(ex.Line, "invalid operation: float %s float in constant expression", ex.Op)
+	return c.constFail(ex.Line, ex.Col, "invalid operation: float %s float in constant expression", ex.Op)
 }
 
 func (c *checker) constBinaryInt(ex *BinaryExpr, x, y constVal) (constVal, bool) {
@@ -366,12 +398,12 @@ func (c *checker) constBinaryInt(ex *BinaryExpr, x, y constVal) (constVal, bool)
 		res = new(big.Int).Mul(x.i, y.i)
 	case "/":
 		if y.i.Sign() == 0 {
-			return c.constFail(ex.Line, "division by zero in constant expression")
+			return c.constFail(ex.Line, ex.Col, "division by zero in constant expression")
 		}
 		res = new(big.Int).Quo(x.i, y.i) // truncated, like Go integers
 	case "%":
 		if y.i.Sign() == 0 {
-			return c.constFail(ex.Line, "division by zero in constant expression")
+			return c.constFail(ex.Line, ex.Col, "division by zero in constant expression")
 		}
 		res = new(big.Int).Rem(x.i, y.i)
 	case "&":
@@ -384,7 +416,7 @@ func (c *checker) constBinaryInt(ex *BinaryExpr, x, y constVal) (constVal, bool)
 		res = new(big.Int).AndNot(x.i, y.i)
 	case "<<", ">>":
 		if y.i.Sign() < 0 || !y.i.IsInt64() || y.i.Int64() > 4096 {
-			return c.constFail(ex.Line, "shift count %s is out of range", y.i.String())
+			return c.constFail(ex.Line, ex.Col, "shift count %s is out of range", y.i.String())
 		}
 		n := uint(y.i.Int64())
 		if ex.Op == "<<" {
@@ -393,7 +425,7 @@ func (c *checker) constBinaryInt(ex *BinaryExpr, x, y constVal) (constVal, bool)
 			res = new(big.Int).Rsh(x.i, n) // arithmetic, like Go
 		}
 	default:
-		return c.constFail(ex.Line, "invalid operation in constant expression: %s", ex.Op)
+		return c.constFail(ex.Line, ex.Col, "invalid operation in constant expression: %s", ex.Op)
 	}
 	// a duration on either side makes the result a duration (same rule
 	// as arithType in sema); rune keeps rune-ness for emission
@@ -412,7 +444,7 @@ func (c *checker) constBinaryInt(ex *BinaryExpr, x, y constVal) (constVal, bool)
 func (c *checker) constCall(ex *CallExpr, fuel *int) (constVal, bool) {
 	id, ok := ex.Fun.(*Ident)
 	if !ok || !basicTypes[id.Name] || len(ex.Args) != 1 {
-		return c.constFail(ex.Line, "not a constant expression (only conversions may be called)")
+		return c.constFail(ex.Line, ex.Col, "not a constant expression (only conversions may be called)")
 	}
 	v, ok := c.constEval(ex.Args[0], fuel)
 	if !ok {
@@ -424,7 +456,7 @@ func (c *checker) constCall(ex *CallExpr, fuel *int) (constVal, bool) {
 		switch v.kind {
 		case ckInt, ckRune, ckDuration:
 			if !fitsBigInt(v.i, to) {
-				return c.constFail(ex.Line, "constant %s overflows %s", v.i.String(), to)
+				return c.constFail(ex.Line, ex.Col, "constant %s overflows %s", v.i.String(), to)
 			}
 			if to == "rune" {
 				return constVal{kind: ckRune, i: v.i}, true
@@ -433,7 +465,7 @@ func (c *checker) constCall(ex *CallExpr, fuel *int) (constVal, bool) {
 		case ckFloat:
 			iv, _ := big.NewFloat(v.f).Int(nil) // truncates toward zero, like Go
 			if !fitsBigInt(iv, to) {
-				return c.constFail(ex.Line, "constant %v overflows %s", v.f, to)
+				return c.constFail(ex.Line, ex.Col, "constant %v overflows %s", v.f, to)
 			}
 			return intVal(iv), true
 		}
@@ -450,7 +482,7 @@ func (c *checker) constCall(ex *CallExpr, fuel *int) (constVal, bool) {
 			return constVal{kind: ckRune, i: big.NewInt(int64([]rune(v.s)[0]))}, true
 		}
 	}
-	return c.constFail(ex.Line, "not a constant expression")
+	return c.constFail(ex.Line, ex.Col, "not a constant expression")
 }
 
 // fitsBigInt reports whether v fits the named integer type.
