@@ -21,6 +21,11 @@ package main
 //	Func(name)                 a new function (set .body to source text)
 //	gen(decl)                  inject a built declaration into the package
 //	len(x) / str(x) / print(...)  utilities (print -> stderr, like @compileLog)
+//	split/join/upper/lower/replace/contains/has_prefix/has_suffix/repeat/trim
+//	                           string utilities for codegen
+//
+// Match expressions also evaluate: literal/wildcard/binding/bool arms with
+// guards, expression bodies only, no variant or channel patterns.
 //
 // Field access on records: .kind .name (read/write), .params .results
 // .fields .variants (live lists with .add), .type (read/write, source
@@ -791,8 +796,107 @@ func (mc *metaCtx) evalExpr(x Expr, env map[string]constVal) (constVal, bool) {
 		return lv.l[n], true
 	case *CallExpr:
 		return mc.evalCall(ex, env)
+	case *MatchExpr:
+		return mc.evalMatch(ex, env)
 	}
 	return mc.fail(lineOf(x), "not a comptime expression")
+}
+
+// evalMatch interprets a comptime match: arms are tried in order and the
+// first whose pattern matches (with a true guard) yields the value. Arm
+// bodies must be expressions; there are no enum values at comptime, so
+// variant and channel patterns are diagnosed, and an unmatched subject is
+// a compile error rather than a runtime panic.
+func (mc *metaCtx) evalMatch(ex *MatchExpr, env map[string]constVal) (constVal, bool) {
+	var subj constVal
+	if ex.Subject != nil {
+		v, ok := mc.evalExpr(ex.Subject, env)
+		if !ok {
+			return constVal{}, false
+		}
+		subj = v
+	}
+	for _, a := range ex.Arms {
+		matched, ok := mc.matchArm(ex, a, subj, env)
+		if !ok {
+			return constVal{}, false
+		}
+		if !matched {
+			continue
+		}
+		if a.Guard != nil {
+			g, ok := mc.evalExpr(a.Guard, env)
+			if !ok {
+				return constVal{}, false
+			}
+			if g.kind != ckBool {
+				return mc.fail(a.Line, "comptime match guard must be bool, got %s", metaString(g))
+			}
+			if !g.b {
+				continue
+			}
+		}
+		if a.BodyExpr == nil {
+			return mc.fail(a.Line, "comptime match arms must be expressions")
+		}
+		return mc.evalExpr(a.BodyExpr, env)
+	}
+	return mc.fail(ex.Line, "non-exhaustive comptime match")
+}
+
+// matchArm reports whether one arm's pattern matches; bindings land in env
+// before the guard runs, so guards can use them.
+func (mc *metaCtx) matchArm(ex *MatchExpr, a MatchArm, subj constVal, env map[string]constVal) (bool, bool) {
+	switch p := a.Pat.(type) {
+	case *WildcardPat:
+		return true, true
+	case *IdentPat:
+		if ex.Subject == nil {
+			mc.fail(p.Line, "binding pattern needs a match subject")
+			return false, false
+		}
+		if p.Name != "_" {
+			env[p.Name] = subj
+		}
+		return true, true
+	case *LiteralPat:
+		if ex.Subject == nil {
+			mc.fail(p.Line, "literal pattern needs a match subject")
+			return false, false
+		}
+		v, ok := mc.evalExpr(p.X, env)
+		if !ok {
+			return false, false
+		}
+		// a kind mismatch just doesn't match (numeric kinds cross-compare)
+		if subj.kind != v.kind && !(isConstNum(subj) && isConstNum(v)) {
+			return false, true
+		}
+		if !isConstNum(subj) && subj.kind != ckString && subj.kind != ckBool {
+			mc.fail(a.Line, "cannot match %s against a literal", metaString(subj))
+			return false, false
+		}
+		eq, ok := mc.c.constBinary(&BinaryExpr{Op: "==", Line: a.Line}, subj, v)
+		if !ok {
+			return false, false
+		}
+		return eq.b, true
+	case *BoolPat:
+		v, ok := mc.evalExpr(p.X, env)
+		if !ok {
+			return false, false
+		}
+		if v.kind != ckBool {
+			mc.fail(p.Line, "bool arm needs a bool condition, got %s", metaString(v))
+			return false, false
+		}
+		return v.b, true
+	case *VariantPat:
+		mc.fail(p.Line, "variant patterns are not supported in comptime match")
+		return false, false
+	}
+	mc.fail(a.Line, "channel patterns are not supported in comptime")
+	return false, false
 }
 
 // typeArg converts a comptime value to a TypeExpr: source text, or a
@@ -934,6 +1038,66 @@ func (mc *metaCtx) evalCall(ex *CallExpr, env map[string]constVal) (constVal, bo
 			return mc.fail(ex.Line, "str takes 1 argument")
 		}
 		return strVal(metaString(args[0])), true
+	case "split":
+		if len(args) != 2 || args[0].kind != ckString || args[1].kind != ckString {
+			return mc.fail(ex.Line, "split takes (string, string)")
+		}
+		parts := strings.Split(args[0].s, args[1].s)
+		elems := make([]constVal, len(parts))
+		for i, p := range parts {
+			elems[i] = strVal(p)
+		}
+		return listVal(elems, nil), true
+	case "join":
+		if len(args) != 2 || args[0].kind != ckList || args[1].kind != ckString {
+			return mc.fail(ex.Line, "join takes (list, string)")
+		}
+		parts := make([]string, len(args[0].l))
+		for i, e := range args[0].l {
+			parts[i] = metaString(e)
+		}
+		return strVal(strings.Join(parts, args[1].s)), true
+	case "upper", "lower", "trim":
+		if len(args) != 1 || args[0].kind != ckString {
+			return mc.fail(ex.Line, "%s takes a string", id.Name)
+		}
+		s := args[0].s
+		switch id.Name {
+		case "upper":
+			s = strings.ToUpper(s)
+		case "lower":
+			s = strings.ToLower(s)
+		case "trim":
+			s = strings.Trim(s, " ")
+		}
+		return strVal(s), true
+	case "replace":
+		if len(args) != 3 || args[0].kind != ckString || args[1].kind != ckString || args[2].kind != ckString {
+			return mc.fail(ex.Line, "replace takes (string, string, string)")
+		}
+		return strVal(strings.ReplaceAll(args[0].s, args[1].s, args[2].s)), true
+	case "contains", "has_prefix", "has_suffix":
+		if len(args) != 2 || args[0].kind != ckString || args[1].kind != ckString {
+			return mc.fail(ex.Line, "%s takes (string, string)", id.Name)
+		}
+		switch id.Name {
+		case "contains":
+			return boolVal(strings.Contains(args[0].s, args[1].s)), true
+		case "has_prefix":
+			return boolVal(strings.HasPrefix(args[0].s, args[1].s)), true
+		}
+		return boolVal(strings.HasSuffix(args[0].s, args[1].s)), true
+	case "repeat":
+		if len(args) != 2 || args[0].kind != ckString || args[1].kind != ckInt {
+			return mc.fail(ex.Line, "repeat takes (string, int)")
+		}
+		if args[1].i.Sign() < 0 {
+			return mc.fail(ex.Line, "repeat count must be non-negative")
+		}
+		if !args[1].i.IsInt64() || args[1].i.Int64() > 10000 {
+			return mc.fail(ex.Line, "repeat count %s exceeds the 10000 limit", args[1].i.String())
+		}
+		return strVal(strings.Repeat(args[0].s, int(args[1].i.Int64()))), true
 	}
 	// not a builtin: a previously declared function, interpreted now
 	if d := mc.findDecl(id.Name); d != nil {
