@@ -34,7 +34,7 @@ feature; documented in SPEC.md) · ❌ not done
 | 24 | definite initialization | ⚠️ by design: Go zero values + maps auto-init (SPEC.md) |
 | 25 | all-paths-return, unreachable code | ✅ |
 | 26 | const eval + fuel | ✅ `comptime expr` (exact big.Int math, overflow/div-zero are compile errors, fuel) + top-level comptime metaprogramming: live AST handles, walk/mutate/`gen` declarations, for-in, print |
-| 27 | diagnostics: spans, secondary labels, suggestions | ✅ snippets+carets (parse cols), notes (return blame, redecl), did-you-mean; sema cols deferred |
+| 27 | diagnostics: spans, secondary labels, suggestions | ✅ snippets+carets on exprs/stmts/patterns/types, notes (return blame, redecl), did-you-mean; decl-level errors stay line-only |
 | 28 | test harness `//~ ERROR`, snapshots, fuzzing | ✅ annotations both directions + fuzz |
 
 **Score: 14 full ✅ · 9 partial ⚠️ · 5 N/A by language scope · 0 unaddressed**
@@ -50,6 +50,7 @@ generic constructor inference (`var r Result[int, string] = Ok(1)`,
 | § | item | status |
 |---|------|--------|
 | 17 | identifier interning | ❌ deferred (perf-only at this size) |
+| 28 | LSP | ⚠️ v1: diagnostics/hover/definition/completion/symbols; single-file, no local-var defs |
 | 29 | spec decisions written down | ✅ SPEC.md |
 
 ## Meta-knowledge checklist (theory landmines)
@@ -66,17 +67,18 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
 ## Next up, in dependency order
 
 1. ~~Parser recovery~~ ✅ · ~~Structs~~ ✅ · ~~`?` try~~ ✅ ·
-   ~~better types (removals, widths, conversions, ctor inference)~~ ✅ ·
-   ~~`comptime` expr (§10)~~ ✅ · ~~diagnostics polish (§11)~~ ✅ ·
-   ~~imports / modules (§3)~~ ✅ · ~~comptime metaprogramming (§10)~~ ✅
-   (+ `gopp fmt`)
-2. **§17 interning + §1 integer IDs** — when compile times or LSP make
+   ~~better types~~ ✅ · ~~`comptime` expr (§10)~~ ✅ ·
+   ~~diagnostics polish (§11)~~ ✅ · ~~imports / modules (§3)~~ ✅ ·
+   ~~comptime metaprogramming (§10)~~ ✅ · ~~sema columns (§11)~~ ✅ ·
+   ~~LSP v1 (§28)~~ ✅ · ~~CI/README/`gopp run`~~ ✅ ·
+   ~~comptime match + string builtins~~ ✅
+2. **§8 generic functions + behaviors** — the flagship: unification
+   (occurs check, fuel), behaviors/impls, deferred obligations.
+3. **§17 interning + §1 integer IDs** — when compile times or LSP make
    them pay; both are wrappers, not rewrites, by design.
-3. **Sema column spans** — expressions carry lines only; threading cols
-   through the AST is a deliberate defer (render falls back to
-   line-level snippets).
+4. **LSP v2** — import-aware analysis, local-var definitions, column
+   positions end-to-end.
 
 Cancelled: `@derive` (superseded by the better-types program — the
 language fixes the types instead of generating boilerplate over weak
-ones). Full §8 (generic functions, unification, behaviors) stays
-deferred per SPEC.md.
+ones). Full §8 stays deferred per SPEC.md until step 2 lands.

@@ -256,26 +256,26 @@ type ctorTarget struct {
 }
 
 type checker struct {
-	diag       *Diagnostics
-	enums      map[string]*EnumDecl
-	structs    map[string]*StructDecl
-	prelude    map[*EnumDecl]bool // synthetic prelude enums (Result, Option)
-	funcs      map[string]*tFunc
-	ctors      map[string]*ctorTarget
-	ambiguous  map[string]bool
-	globals    *scope
-	cur        *scope
+	diag        *Diagnostics
+	enums       map[string]*EnumDecl
+	structs     map[string]*StructDecl
+	prelude     map[*EnumDecl]bool // synthetic prelude enums (Result, Option)
+	funcs       map[string]*tFunc
+	ctors       map[string]*ctorTarget
+	ambiguous   map[string]bool
+	globals     *scope
+	cur         *scope
 	curResults  []Type
 	curFuncLine int // declaration line of the function being checked (§11 notes)
 	loopDepth   int
 	// outputs for the emitter (side tables, §1)
-	types      map[Expr]Type
-	resolved   map[Expr]*ctorTarget // idents/call-funs that are variant references
-	inferred   map[Expr][]Type      // ctor exprs whose type args were inferred (§8-lite)
-	constVals  map[Expr]constVal    // comptime exprs -> compile-time values (§10)
-	patVariant map[Pattern]bool     // IdentPat that matches a unit variant (not a binding)
-	cycleDone  map[*StructDecl]bool // structs already reported on an infinite-size cycle
-	preludeVars map[Expr]bool       // idents bound in the prelude (ms, second, minute)
+	types       map[Expr]Type
+	resolved    map[Expr]*ctorTarget // idents/call-funs that are variant references
+	inferred    map[Expr][]Type      // ctor exprs whose type args were inferred (§8-lite)
+	constVals   map[Expr]constVal    // comptime exprs -> compile-time values (§10)
+	patVariant  map[Pattern]bool     // IdentPat that matches a unit variant (not a binding)
+	cycleDone   map[*StructDecl]bool // structs already reported on an infinite-size cycle
+	preludeVars map[Expr]bool        // idents bound in the prelude (ms, second, minute)
 	// §3 imports: qualifier -> dependency checker (checked before the
 	// importer, so its funcs/ctors/enums tables are complete)
 	imports     map[string]*checker
@@ -320,19 +320,19 @@ func check(f *File) (*checker, *Diagnostics) {
 // paths for emission; src is the package source (comptime .body text).
 func checkImports(f *File, imports map[string]*checker, importPaths map[string]string, src ...string) (*checker, *Diagnostics) {
 	c := &checker{
-		diag:       &Diagnostics{},
-		enums:      map[string]*EnumDecl{},
-		structs:    map[string]*StructDecl{},
-		prelude:    map[*EnumDecl]bool{},
-		funcs:      map[string]*tFunc{},
-		ctors:      map[string]*ctorTarget{},
-		ambiguous:  map[string]bool{},
-		globals:    &scope{vars: map[string]Type{}},
-		types:      map[Expr]Type{},
-		resolved:   map[Expr]*ctorTarget{},
-		inferred:   map[Expr][]Type{},
-		constVals:  map[Expr]constVal{},
-		patVariant: map[Pattern]bool{},
+		diag:        &Diagnostics{},
+		enums:       map[string]*EnumDecl{},
+		structs:     map[string]*StructDecl{},
+		prelude:     map[*EnumDecl]bool{},
+		funcs:       map[string]*tFunc{},
+		ctors:       map[string]*ctorTarget{},
+		ambiguous:   map[string]bool{},
+		globals:     &scope{vars: map[string]Type{}},
+		types:       map[Expr]Type{},
+		resolved:    map[Expr]*ctorTarget{},
+		inferred:    map[Expr][]Type{},
+		constVals:   map[Expr]constVal{},
+		patVariant:  map[Pattern]bool{},
 		preludeVars: map[Expr]bool{},
 		imports:     map[string]*checker{},
 		importPaths: map[string]string{},
@@ -2052,7 +2052,7 @@ func (c *checker) checkMatchSubject(ex *MatchExpr, want Type) Type {
 	st := c.checkExpr(ex.Subject)
 	en, isEnum := st.(*tEnum)
 	covered := map[string]bool{}
-	seenLits := map[string]bool{}  // unguarded basic literals, for duplicate detection
+	seenLits := map[string]bool{} // unguarded basic literals, for duplicate detection
 	hasWild := false
 	catchAll := false // an unguarded arm above matches everything (§9 usefulness)
 	var resultT Type

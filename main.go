@@ -40,11 +40,18 @@ import (
 //   - comptime functions
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp run <input.gopp> | gopp fmt [-w] <files...>")
+		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp run <input.gopp> | gopp fmt [-w] <files...> | gopp lsp")
 		os.Exit(2)
 	}
 	if os.Args[1] == "fmt" {
 		runFmt(os.Args[2:])
+		return
+	}
+	if os.Args[1] == "lsp" {
+		// language server over stdio (§28)
+		if err := serveLSP(os.Stdin, os.Stdout); err != nil {
+			fatal(err)
+		}
 		return
 	}
 	if os.Args[1] == "run" {

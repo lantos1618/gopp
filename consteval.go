@@ -34,13 +34,13 @@ const (
 
 type constVal struct {
 	kind constKind
-	i    *big.Int    // ckInt, ckRune, ckDuration
-	f    float64     // ckFloat
-	s    string      // ckString
-	b    bool        // ckBool
-	l    []constVal  // ckList
+	i    *big.Int             // ckInt, ckRune, ckDuration
+	f    float64              // ckFloat
+	s    string               // ckString
+	b    bool                 // ckBool
+	l    []constVal           // ckList
 	add  func(constVal) error // ckList: optional .add(...) method (live lists)
-	r    *metaRecord // ckRecord
+	r    *metaRecord          // ckRecord
 }
 
 func intVal(v *big.Int) constVal  { return constVal{kind: ckInt, i: v} }

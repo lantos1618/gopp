@@ -46,8 +46,8 @@ var metaOut io.Writer = os.Stderr
 
 // metaRecord is a live handle onto an AST node.
 type metaRecord struct {
-	what   string      // "FuncDecl", "EnumDecl", "StructDecl", "Field", "Variant"
-	node   any         // the wrapped node (*FuncDecl, *EnumDecl, *StructDecl, *Field, *Variant)
+	what   string // "FuncDecl", "EnumDecl", "StructDecl", "Field", "Variant"
+	node   any    // the wrapped node (*FuncDecl, *EnumDecl, *StructDecl, *Field, *Variant)
 	fields []metaField
 }
 
@@ -66,7 +66,7 @@ func (r *metaRecord) field(name string) *metaField {
 	return nil
 }
 
-func strVal(s string) constVal     { return constVal{kind: ckString, s: s} }
+func strVal(s string) constVal      { return constVal{kind: ckString, s: s} }
 func recVal(r *metaRecord) constVal { return constVal{kind: ckRecord, r: r} }
 
 func listVal(l []constVal, add func(constVal) error) constVal {

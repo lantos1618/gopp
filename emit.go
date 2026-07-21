@@ -18,13 +18,13 @@ import (
 //   - loop { }      -> labeled for; break loop -> break label
 
 type emitter struct {
-	c          *checker
-	buf        strings.Builder
-	tmp        int
-	loops      []string
-	curResults []Type // enclosing function's results (for ? desugars)
-	needTime   bool   // emitted time.Duration somewhere: add the import
-	needGopp   bool   // emitted a gopp.* reference: add the prelude import
+	c           *checker
+	buf         strings.Builder
+	tmp         int
+	loops       []string
+	curResults  []Type          // enclosing function's results (for ? desugars)
+	needTime    bool            // emitted time.Duration somewhere: add the import
+	needGopp    bool            // emitted a gopp.* reference: add the prelude import
 	usedImports map[string]bool // package qualifiers referenced: add imports
 }
 

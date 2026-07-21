@@ -221,10 +221,17 @@ but null pointer constants do not — there is no way to write one.
   text or a type handle), `Variant(name)`, `Enum(name)`, `Struct(name)`,
   `Func(name)`; `gen(decl)` injects a built declaration into the package.
 - Statement language: `for x in list { }` (for-in is comptime-only),
-  `if/else`, `:=` / `=` bindings, field assignment, expression statements.
-  Expressions: literals, arithmetic/logic/string ops, field access,
+  `if/else`, `for`/`loop`/`break`, `:=` / `=` bindings, field assignment,
+  `return` (inside comptime-called functions). Comptime `match` supports
+  literal/wildcard/binding/bool arms with guards (expression bodies only);
+  variant and channel patterns are comptime errors, and an unmatched
+  subject is a compile error ("non-exhaustive comptime match"), not a
+  panic.
+- Expressions: literals, arithmetic/logic/string ops, field access,
   indexing, and the builtins `print` (to stderr, like Zig's @compileLog),
-  `len`, `str`, `decls`, `gen`, and the constructors.
+  `len`, `str`, `decls`, `gen`, the constructors, and the string tools
+  `split` / `join` / `upper` / `lower` / `trim` / `replace` / `contains` /
+  `has_prefix` / `has_suffix` / `repeat` (count ≤ 10000) for codegen.
 - Sharp edges, on purpose: renaming a type does not rewrite references
   to it; metaprogramming errors are ordinary diagnostics; fuel-bounded.
 
@@ -245,8 +252,11 @@ drop order) do not apply and are deliberately deleted from the roadmap.
   metaprogramming) cover the code-generation-shaped wants with live AST
   handles instead of token rewriting.
 - **§19 glob imports, §25 effects** — no syntax for them.
-- **§27/§28 incremental + LSP** — the pass architecture and side tables
-  were built so these wrap around, not rewrite in. Later.
+- **§27 incremental** — the pass architecture and side tables were built
+  so queries wrap around, not rewrite in. Later.
+- **§28 LSP** — v1 landed (`gopp lsp`): diagnostics, hover, definition,
+  completion, document symbols. Single-file analysis; local-var
+  definitions and import-aware analysis are the known gaps.
 
 ## Testing (§12)
 
