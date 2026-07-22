@@ -27,13 +27,13 @@ func (c *checker) checkFlow(f *File) {
 				}
 			}
 		case *ImplDecl:
-			it, _ := fn.Type.(*IdentType)
+			tn := implTypeName(fn.Type)
 			for _, m := range fn.Methods {
-				if m.Body == nil || it == nil || c.methods[it.Name] == nil {
+				if m.Body == nil || tn == "" || c.methods[tn] == nil {
 					continue
 				}
 				c.scanUnreachable(m.Body.List)
-				if ft := c.methods[it.Name][m.Name]; ft != nil && len(ft.results) > 0 {
+				if ft := c.methods[tn][m.Name]; ft != nil && len(ft.results) > 0 {
 					if !c.listDiverges(m.Body.List) {
 						c.diag.errorf(m.Line, "method %s: missing return (some path falls through without returning)", m.Name)
 					}

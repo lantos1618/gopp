@@ -543,18 +543,26 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 		if !ok {
 			continue
 		}
-		it, _ := imp.Type.(*IdentType)
-		if it == nil || c.methods[it.Name] == nil {
+		tn := implTypeName(imp.Type)
+		if tn == "" || c.methods[tn] == nil {
 			continue // validation already reported the problem
 		}
 		var rt Type
-		if en, ok := c.enums[it.Name]; ok {
+		if en, ok := c.enums[tn]; ok {
 			rt = &tEnum{decl: en}
+			if len(en.TypeParams) > 0 { // generic impl: T is in scope
+				var args []Type
+				for _, tp := range en.TypeParams {
+					args = append(args, tTypeParam{tp})
+				}
+				rt = &tEnum{decl: en, args: args}
+				c.curTypeParams = en.TypeParams
+			}
 		} else {
-			rt = &tStruct{decl: c.structs[it.Name]}
+			rt = &tStruct{decl: c.structs[tn]}
 		}
 		for _, m := range imp.Methods {
-			ft := c.methods[it.Name][m.Name]
+			ft := c.methods[tn][m.Name]
 			if ft == nil {
 				continue
 			}
@@ -569,10 +577,24 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			}
 			c.checkStmts(m.Body.List)
 		}
+		c.curTypeParams = nil
 	}
 	// pass 3 (§9): flow checks over the typed bodies
 	c.checkFlow(f)
 	return c, c.diag
+}
+
+// substFunc instantiates a stored method signature (which may mention
+// the type's type parameters) with concrete arguments.
+func substFunc(ft *tFunc, params []string, args []Type) *tFunc {
+	out := &tFunc{typeParams: ft.typeParams, bounds: ft.bounds}
+	for _, p := range ft.params {
+		out.params = append(out.params, subst(p, params, args))
+	}
+	for _, r := range ft.results {
+		out.results = append(out.results, subst(r, params, args))
+	}
+	return out
 }
 
 // methodOf finds a method on ty (§8): impls for concrete local types,
@@ -582,7 +604,12 @@ func (c *checker) methodOf(ty Type, name string) *tFunc {
 	switch t := ty.(type) {
 	case *tEnum:
 		if ms := c.methods[t.decl.Name]; ms != nil {
-			return ms[name]
+			if m := ms[name]; m != nil {
+				if len(t.args) > 0 { // generic impl: instantiate the sig
+					return substFunc(m, t.decl.TypeParams, t.args)
+				}
+				return m
+			}
 		}
 	case *tStruct:
 		if ms := c.methods[t.decl.Name]; ms != nil {
@@ -793,20 +820,68 @@ func (c *checker) registerImpls(f *File) {
 			c.diag.errorf(imp.Line, "undefined behavior %s", imp.Behavior)
 			continue
 		}
-		it, ok := imp.Type.(*IdentType)
-		if !ok {
+		it, isPlain := imp.Type.(*IdentType)
+		ix, isGeneric := imp.Type.(*IndexType)
+		var tn string
+		var genParams []string
+		switch {
+		case isPlain:
+			tn = it.Name
+		case isGeneric:
+			base, ok := ix.X.(*IdentType)
+			if !ok {
+				c.diag.errorf(imp.Line, "impl target must be a local type name")
+				continue
+			}
+			tn = base.Name
+			bad := false
+			for _, a := range ix.Args {
+				at, ok := a.(*IdentType)
+				if !ok {
+					c.diag.errorf(imp.Line, "generic impl parameters must be plain names (impl %s for %s[T])", imp.Behavior, tn)
+					bad = true
+					break
+				}
+				genParams = append(genParams, at.Name)
+			}
+			if bad {
+				continue
+			}
+		default:
 			c.diag.errorf(imp.Line, "impl target must be a local type name")
 			continue
 		}
-		tn := it.Name
 		var rt Type
 		if en, ok := c.enums[tn]; ok {
 			if len(en.TypeParams) > 0 {
-				c.diag.errorf(imp.Line, "impls on generic types are not supported yet")
+				if genParams == nil {
+					c.diag.errorf(imp.Line, "impl for generic %s needs its type parameters: impl %s for %s[%s]",
+						tn, imp.Behavior, tn, strings.Join(en.TypeParams, ", "))
+					continue
+				}
+				if strings.Join(genParams, ",") != strings.Join(en.TypeParams, ",") {
+					c.diag.errorf(imp.Line, "impl for %s must use its type parameters in order: impl %s for %s[%s]",
+						tn, imp.Behavior, tn, strings.Join(en.TypeParams, ", "))
+					continue
+				}
+				var args []Type
+				for _, tp := range en.TypeParams {
+					args = append(args, tTypeParam{tp})
+				}
+				rt = &tEnum{decl: en, args: args}
+				c.curTypeParams = en.TypeParams // T in scope for the impl's sigs
+			} else {
+				if genParams != nil {
+					c.diag.errorf(imp.Line, "%s is not generic", tn)
+					continue
+				}
+				rt = &tEnum{decl: en}
+			}
+		} else if st, ok := c.structs[tn]; ok {
+			if genParams != nil {
+				c.diag.errorf(imp.Line, "%s is not generic", tn)
 				continue
 			}
-			rt = &tEnum{decl: en}
-		} else if st, ok := c.structs[tn]; ok {
 			rt = &tStruct{decl: st}
 		} else {
 			c.diag.errorf(imp.Line, "impl target %s is not a local enum or struct (the orphan rule)", tn)
@@ -865,7 +940,22 @@ func (c *checker) registerImpls(f *File) {
 				c.diag.errorf(imp.Line, "missing method %s (behavior %s for %s)", bm.Name, imp.Behavior, tn)
 			}
 		}
+		c.curTypeParams = nil // generic impl scope ends
 	}
+}
+
+// implTypeName extracts the target type's name from an impl's type
+// expression (plain or generic: Box / Box[T]).
+func implTypeName(te TypeExpr) string {
+	switch t := te.(type) {
+	case *IdentType:
+		return t.Name
+	case *IndexType:
+		if b, ok := t.X.(*IdentType); ok {
+			return b.Name
+		}
+	}
+	return ""
 }
 
 // recvName extracts the receiver's binding name from a method's first
@@ -1180,6 +1270,19 @@ func (c *checker) checkStmt(s Stmt) {
 					c.checkAgainst(st.Rhs[i], lt)
 				} else { // +=, -=, ...
 					rt := c.checkExpr(st.Rhs[i])
+					// §14: compound assignment desugars to x = x.op(y)
+					base := st.Op[:1]
+					if mn := c.operatorMethod(lt, base, false); mn != "" && (base == "+" || base == "-" || base == "*" || base == "/" || base == "%") {
+						if m := c.methodOf(lt, mn); m != nil && len(m.params) == 1 {
+							c.expect(rt, m.params[0], lineOf(st.Rhs[i]), colOf(st.Rhs[i]))
+							c.operatorOps[st.Lhs[i]] = mn
+							continue
+						}
+					}
+					if !isNumeric(lt) && !sameType(lt, tstring) {
+						c.diag.errorfAt(lineOf(st.Lhs[i]), colOf(st.Lhs[i]), "invalid operation: %s %s (no operator impl)", lt, st.Op)
+						continue
+					}
 					c.expect(rt, lt, lineOf(st.Rhs[i]), colOf(st.Rhs[i]))
 				}
 			}

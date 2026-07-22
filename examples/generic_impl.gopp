@@ -1,0 +1,49 @@
+package main
+
+// §8 leftover: impls on generic types. §14 leftover: compound assign.
+
+enum Box[T] {
+    Full(v T)
+    Empty
+}
+
+behavior Shower {
+    Show(self) string
+}
+
+impl Shower for Box[T] {
+    Show(self) string {
+        return match self {
+            Full(v) -> "full"
+            Empty -> "empty"
+        }
+    }
+}
+
+type Vec2 struct {
+    X int
+    Y int
+}
+
+impl Add for Vec2 {
+    add(self, rhs Vec2) Vec2 {
+        return Vec2{X: self.X + rhs.X, Y: self.Y + rhs.Y}
+    }
+}
+
+func Tell[T: Shower](x T) string {
+    return x.Show()
+}
+
+func main() {
+    b := Full[int](5)
+    println(b.Show()) // generic impl on a concrete instantiation
+    e := Empty[int]()
+    println(e.Show())
+    println(Tell(b)) // bound satisfied by Box[int]
+    v := Vec2{X: 1, Y: 1}
+    v += Vec2{X: 2, Y: 3} // desugars to v = v.add(...)
+    v += v
+    println(v.X, v.Y)
+}
+

@@ -325,9 +325,11 @@ func (e *emitter) emitOperatorInterface(name string) {
 }
 
 // emitImpl lowers impl methods to Go receiver methods — exactly how Go
-// interfaces get satisfied.
+// interfaces get satisfied. Generic targets render the receiver with
+// the type parameters (func (self Box[T]) Show() ...).
 func (e *emitter) emitImpl(d *ImplDecl) {
-	tn := d.Type.(*IdentType).Name // registerImpls guaranteed this
+	tn := implTypeName(d.Type) // registerImpls guaranteed this
+	rt := e.typeExprGo(d.Type)
 	for _, m := range d.Methods {
 		ft := e.c.methods[tn][m.Name]
 		if ft == nil {
@@ -335,7 +337,7 @@ func (e *emitter) emitImpl(d *ImplDecl) {
 		}
 		e.curResults = ft.results
 		recv := recvName(m)
-		e.s("func (%s %s) %s%s {\n", recv, tn, m.Name, e.sigGo(m.Params[1:], m.Results))
+		e.s("func (%s %s) %s%s {\n", recv, rt, m.Name, e.sigGo(m.Params[1:], m.Results))
 		e.emitStmts(m.Body.List)
 		e.s("}\n\n")
 	}
@@ -454,6 +456,13 @@ func (e *emitter) emitStmt(s Stmt) {
 		rhs := make([]string, len(st.Rhs))
 		for i, r := range st.Rhs {
 			rhs[i] = e.expr(r)
+		}
+		if len(st.Lhs) == 1 {
+			if mn, ok := e.c.operatorOps[st.Lhs[0]]; ok {
+				// §14 compound assignment: x += y -> x = x.add(y)
+				e.s("%s = %s.%s(%s)\n", lhs[0], lhs[0], mn, rhs[0])
+				return
+			}
 		}
 		e.s("%s %s %s\n", strings.Join(lhs, ", "), st.Op, strings.Join(rhs, ", "))
 	case *ExprStmt:

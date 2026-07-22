@@ -102,8 +102,10 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - Emission desugars to method calls and writes the prelude interfaces
   only when used: `type Add[T any] interface { add(T) T }`; a bound
   `T: Add` becomes the Go constraint `T Add[T]`.
-- Deferred: compound assignment (`+=`), indexing operators, shifts on
-  user types.
+- Compound assignment desugars too: `v += u` is `v = v.add(u)`. A
+  compound-assignable type without the impl is now a sema error (it used
+  to slip through to a Go compile error — the leak is closed).
+- Deferred: indexing operators, shifts on user types.
 
 ## Behaviors (§8)
 
@@ -122,8 +124,11 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - Instantiation checks the bound: `Shout(1)` → "int does not implement
   Stringer (bound of Shout's T)". Basic types never implement behaviors
   (orphan rule again).
-- Deferred: impls on generic types, imported behaviors/types in impls,
-  default method bodies, multiple bounds per parameter.
+- Generic impls: `impl Shower for Box[T]` — the enum's own parameters,
+  in order; methods use `T` rigidly, signatures instantiate per call
+  site. Emission is a Go receiver method on `Box[T]`.
+- Deferred: imported behaviors/types in impls, default method bodies,
+  multiple bounds per parameter.
 
 ## Generic constructor inference (§8-lite)
 

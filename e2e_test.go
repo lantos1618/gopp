@@ -162,6 +162,14 @@ func TestEndToEndStdlib(t *testing.T) {
 	}
 }
 
+func TestEndToEndGenericImpl(t *testing.T) {
+	got := compileAndRun(t, "examples/generic_impl.gopp")
+	want := "full\nempty\nfull\n6 8\n"
+	if got != want {
+		t.Fatalf("generic_impl.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
 // writePkg makes a one-file package in dir/name for loader unit tests.
 func writePkg(t *testing.T, dir, name, src string) {
 	t.Helper()
