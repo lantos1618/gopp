@@ -49,6 +49,14 @@ func compileAndRun(t *testing.T, srcPath string) string {
 	return string(out)
 }
 
+func TestEndToEndSlices(t *testing.T) {
+	got := compileAndRun(t, "examples/slices.gopp")
+	want := "6\n0\n1\n15\n2 5\n"
+	if got != want {
+		t.Fatalf("slices.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestEndToEndHello(t *testing.T) {
 	got := compileAndRun(t, "examples/hello.gopp")
 	want := "live\nlive\nrecv fired\n5\nerr: division by zero\n"
