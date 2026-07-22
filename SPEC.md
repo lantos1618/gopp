@@ -363,6 +363,9 @@ but null pointer constants do not — there is no way to write one.
   `len`, `str`, `decls`, `gen`, the constructors, and the string tools
   `split` / `join` / `upper` / `lower` / `trim` / `replace` / `contains` /
   `has_prefix` / `has_suffix` / `repeat` (count ≤ 10000) for codegen.
+- `embed("path")` reads a file at compile time — in comptime blocks
+  and as a `comptime embed(...)` constant (baked into the binary).
+  Paths are relative to the package directory and may not escape it.
 - Sharp edges, on purpose: renaming a type does not rewrite references
   to it; metaprogramming errors are ordinary diagnostics; fuel-bounded.
 

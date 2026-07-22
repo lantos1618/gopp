@@ -112,7 +112,7 @@ func compile(in, outDir string) int {
 		emitGraph(root, outDir)
 		return 0
 	}
-	chk, semDiags := checkImports(file, nil, nil, checkOpts{src: string(src)})
+	chk, semDiags := checkImports(file, nil, nil, checkOpts{src: string(src), srcDir: filepath.Dir(in)})
 	diags.items = append(diags.items, semDiags.items...)
 	if printDiags(diags, string(src)) {
 		return 1

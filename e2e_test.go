@@ -25,7 +25,7 @@ func compileAndRun(t *testing.T, srcPath string) string {
 	if parseDiags.HasErrors() {
 		t.Fatalf("parse:\n%s", parseDiags)
 	}
-	chk, diags := checkImports(file, nil, nil, checkOpts{src: string(src)})
+	chk, diags := checkImports(file, nil, nil, checkOpts{src: string(src), srcDir: filepath.Dir(srcPath)})
 	if diags.HasErrors() {
 		t.Fatalf("check:\n%s", diags)
 	}
@@ -332,5 +332,13 @@ func TestGoppTestFailure(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "FAIL TestBad: assertEq failed: 2 != 3") {
 		t.Fatalf("expected failure report, got:\n%s", out.String())
+	}
+}
+
+func TestEndToEndEmbed(t *testing.T) {
+	got := compilePkgAndRun(t, "examples/embed")
+	want := "hello from a file\nline two\n\nlen: 27\n"
+	if got != want {
+		t.Fatalf("embed output:\n got %q\nwant %q", got, want)
 	}
 }

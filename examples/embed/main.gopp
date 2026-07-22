@@ -1,0 +1,14 @@
+package main
+
+// comptime embed: file contents folded into the binary at compile time.
+
+comptime {
+    // comptime blocks can embed too — e.g. baking a lookup table
+    print("embedded", len(embed("data.txt")), "bytes")
+}
+
+func main() {
+    s := comptime embed("data.txt")
+    println(s)
+    println("len:", len(s))
+}

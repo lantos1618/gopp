@@ -1,0 +1,12 @@
+package main
+
+// comptime embed: error paths.
+
+func main() {
+    s := comptime embed("missing.txt") //~ ERROR no such file or directory
+    println(s)
+    t := comptime embed("../escape.txt") //~ ERROR escapes the package directory
+    println(t)
+    u := comptime embed(42) //~ ERROR embed path must be a string, got untyped int
+    println(u)
+}

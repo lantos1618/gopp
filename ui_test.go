@@ -63,7 +63,7 @@ func runUIFile(src string) *Diagnostics {
 	if diags.HasErrors() {
 		return diags
 	}
-	_, sd := check(f)
+	_, sd := checkImports(f, nil, nil, checkOpts{src: src, srcDir: "tests/ui"})
 	diags.items = append(diags.items, sd.items...)
 	return diags
 }

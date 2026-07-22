@@ -2,7 +2,10 @@ package main
 
 import (
 	"math/big"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // consteval.go — §10 const evaluation for `comptime expr`.
@@ -455,7 +458,23 @@ func (c *checker) constBinaryInt(ex *BinaryExpr, x, y constVal) (constVal, bool)
 // part of checkExpr), so this only computes and range-checks.
 func (c *checker) constCall(ex *CallExpr, fuel *int) (constVal, bool) {
 	id, ok := ex.Fun.(*Ident)
-	if !ok || !basicTypes[id.Name] || len(ex.Args) != 1 {
+	if !ok {
+		return c.constFail(ex.Line, ex.Col, "not a constant expression (only conversions may be called)")
+	}
+	if id.Name == "embed" {
+		if len(ex.Args) != 1 {
+			return c.constFail(ex.Line, ex.Col, "embed takes 1 argument")
+		}
+		pv, ok := c.constEval(ex.Args[0], fuel)
+		if !ok {
+			return constVal{}, false
+		}
+		if pv.kind != ckString {
+			return c.constFail(ex.Line, ex.Col, "embed path must be a string constant")
+		}
+		return c.constEmbed(ex.Line, ex.Col, pv.s)
+	}
+	if !basicTypes[id.Name] || len(ex.Args) != 1 {
 		return c.constFail(ex.Line, ex.Col, "not a constant expression (only conversions may be called)")
 	}
 	v, ok := c.constEval(ex.Args[0], fuel)
@@ -495,6 +514,27 @@ func (c *checker) constCall(ex *CallExpr, fuel *int) (constVal, bool) {
 		}
 	}
 	return c.constFail(ex.Line, ex.Col, "not a constant expression")
+}
+
+// constEmbed reads an embedded file at compile time (§10): relative to
+// the package directory, and like imports it may not escape it.
+func (c *checker) constEmbed(line, col int, path string) (constVal, bool) {
+	if c.srcDir == "" {
+		return c.constFail(line, col, "embed: no source directory available")
+	}
+	abs, err := filepath.Abs(filepath.Join(c.srcDir, filepath.FromSlash(path)))
+	if err != nil {
+		return c.constFail(line, col, "embed: %s", err)
+	}
+	root, _ := filepath.Abs(c.srcDir)
+	if rel, rerr := filepath.Rel(root, abs); rerr != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return c.constFail(line, col, "embed path %s escapes the package directory", path)
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return c.constFail(line, col, "embed: %s", err)
+	}
+	return constVal{kind: ckString, s: string(data)}, true
 }
 
 // fitsBigInt reports whether v fits the named integer type.

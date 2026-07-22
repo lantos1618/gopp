@@ -298,6 +298,7 @@ type checker struct {
 	qualified   map[Expr]string   // value exprs referencing a dependency (foo.Bar) -> qualifier
 	declPkg     map[Decl]string   // foreign enum/struct decl -> owning package qualifier
 	src         string            // package source (for comptime .body text)
+	srcDir      string            // package directory (comptime embed)
 	allowNative bool              // stdlib: `= native` declarations permitted
 	// declSites records every local variable declaration site (§28: the
 	// LSP's go-to-definition — scopes are gone after checking, so a
@@ -360,6 +361,7 @@ func check(f *File) (*checker, *Diagnostics) {
 // (stdlib packages only — user code gets an error).
 type checkOpts struct {
 	src         string
+	srcDir      string // package directory (comptime embed)
 	allowNative bool
 }
 
@@ -402,6 +404,7 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 	}
 	if len(opts) > 0 {
 		c.src = opts[0].src
+		c.srcDir = opts[0].srcDir
 		c.allowNative = opts[0].allowNative
 	}
 	// §10 metaprogramming: comptime blocks run BEFORE any registration or
@@ -2145,6 +2148,20 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 			// a type name in call position is an explicit conversion (§7) —
 			// the only sanctioned way to mix numeric widths
 			return c.checkConversion(ex, fun.Name)
+		}
+		if fun.Name == "embed" {
+			// comptime embed("path"): the file's contents, folded at
+			// compile time — only meaningful inside `comptime`
+			if len(ex.Args) != 1 {
+				c.diag.errorfAt(ex.Line, ex.Col, "embed takes 1 argument")
+				return terr
+			}
+			at := c.checkExpr(ex.Args[0])
+			if !isErr(at) && !sameType(at, tstring) {
+				c.diag.errorfAt(ex.Line, ex.Col, "embed path must be a string, got %s", at)
+				return terr
+			}
+			return tstring
 		}
 		if ft, ok := c.funcs[fun.Name]; ok {
 			if len(ft.typeParams) > 0 { // §8: infer the instantiation

@@ -233,7 +233,7 @@ func checkGraph(root *pkg) {
 			imports[dep.name] = dep.chk
 			paths[dep.name] = filepath.ToSlash(filepath.Join(p.out, p.imports[i].Path))
 		}
-		chk, semDiags := checkImports(p.file, imports, paths, checkOpts{src: p.src, allowNative: p.stdlibGo != ""})
+		chk, semDiags := checkImports(p.file, imports, paths, checkOpts{src: p.src, srcDir: p.dir, allowNative: p.stdlibGo != ""})
 		p.chk = chk
 		p.diags.items = append(p.diags.items, semDiags.items...)
 	}

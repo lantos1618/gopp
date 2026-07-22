@@ -1043,6 +1043,16 @@ func (mc *metaCtx) evalCall(ex *CallExpr, env map[string]constVal) (constVal, bo
 			return mc.fail(ex.Line, "str takes 1 argument")
 		}
 		return strVal(metaString(args[0])), true
+	case "embed":
+		// read a file relative to the package directory at comptime
+		if len(args) != 1 || args[0].kind != ckString {
+			return mc.fail(ex.Line, "embed takes a path string")
+		}
+		v, ok := mc.c.constEmbed(ex.Line, 0, args[0].s)
+		if !ok {
+			return constVal{}, false
+		}
+		return v, true
 	case "split":
 		if len(args) != 2 || args[0].kind != ckString || args[1].kind != ckString {
 			return mc.fail(ex.Line, "split takes (string, string)")
