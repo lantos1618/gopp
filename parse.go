@@ -1188,7 +1188,7 @@ func (p *parser) parsePrimary() Expr {
 func (p *parser) parseSliceLit() Expr {
 	line := p.cur().line
 	col := p.cur().col
-	p.next() // [
+	p.next()                 // [
 	if p.cur().text == "]" { // Go's []T — rejected with guidance
 		p.errorft(p.cur(), "slice types are written [T] (e.g. [int])")
 	}
