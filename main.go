@@ -41,8 +41,14 @@ import (
 //   - guards on channel arms and .closed() arms (Go channels cannot peek)
 //   - comptime functions
 func main() {
+	if wasmMode {
+		// js/wasm build: the goppCompile global is registered by an
+		// init in wasm_js.go; keep the module alive instead of
+		// parsing CLI args (there are none in the browser).
+		select {}
+	}
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp run <input.gopp> | gopp build <input.gopp> [-o binary] | gopp test [dir] | gopp fmt [-w] <files...> | gopp lsp")
+		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp run <input.gopp> | gopp build <input.gopp> [-o binary] | gopp test [dir] | gopp fmt [-w] <files...> | gopp lsp | gopp play")
 		os.Exit(2)
 	}
 	if os.Args[1] == "fmt" {
@@ -64,6 +70,10 @@ func main() {
 	}
 	if os.Args[1] == "test" {
 		os.Exit(runTest(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	if os.Args[1] == "play" {
+		// browser playground: wasm compiler + static file server
+		os.Exit(runPlay(os.Args[2:]))
 	}
 	in := os.Args[1]
 	outDir := "gopp-out"
