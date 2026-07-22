@@ -1,0 +1,35 @@
+package main
+
+// multiple return values: Go-style multi-result functions.
+
+func swap(a int, b string) (string, int) {
+    return b, a
+}
+
+// divmod returns quotient and remainder together.
+func divmod(a int, b int) (int, int) {
+    return a / b, a % b
+}
+
+// a call in return position spreads over the declared results
+func divmod100(by int) (int, int) {
+    return divmod(100, by)
+}
+
+func main() {
+    s, n := swap(1, "one")
+    println(s, n)
+
+    q, r := divmod(17, 5)
+    println(q, r)
+
+    // reassignment distributes too; the blank skips a position
+    q, r = divmod(22, 7)
+    println(q, r)
+
+    _, rem := divmod(10, 3)
+    println(rem)
+
+    x, y := divmod100(6)
+    println(x, y)
+}

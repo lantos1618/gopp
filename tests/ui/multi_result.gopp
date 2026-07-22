@@ -1,0 +1,67 @@
+package main
+
+// multiple return values: positional return checking, distribution into
+// multi-assignment, spread returns, and the single-value-context error.
+
+func pair() (int, string) {
+    return 1, "a"
+}
+
+func swap(a int, b string) (string, int) {
+    return b, a
+}
+
+func one() int {
+    return 1
+}
+
+func retArity() (int, string) {
+    return 1 //~ ERROR return has 1 value(s), function declares 2
+}
+
+func retFirst() (int, string) {
+    return "a", "b" //~ ERROR expected int, found string
+}
+
+func retSecond() (int, string) {
+    return 1, 2 //~ ERROR expected string, found untyped int
+}
+
+// a call in return position spreads over the declared results
+func spreadOK() (int, string) {
+    return pair()
+}
+
+func spreadArity() (int, string, int) {
+    return pair() //~ ERROR return has 2 value(s), function declares 3
+}
+
+func spreadTypes() (string, string) {
+    return pair() //~ ERROR expected string, found int
+}
+
+func main() {
+    // distribution: := and =, blank per position
+    a, b := pair()
+    println(a, b)
+    a, b = pair()
+    println(a, b)
+    _, s := pair()
+    println(s)
+    n, _ := pair()
+    println(n)
+    x, y := swap(1, "a")
+    println(x, y)
+    z, w := spreadOK()
+    println(z, w)
+
+    // a multi-result call yields no single value
+    v := pair() //~ ERROR multiple-value pair() in single-value context
+    println(v)
+    println(pair()) //~ ERROR multiple-value pair() in single-value context
+    println("v=${pair()}") //~ ERROR multiple-value pair() in single-value context
+
+    // arity: the call's results must match the targets one-for-one
+    _, _, _ = pair() //~ ERROR assignment mismatch: 3 left, 2 right
+    _, _ = one() //~ ERROR assignment mismatch: 2 left, 1 right
+}

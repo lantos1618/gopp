@@ -327,6 +327,11 @@ type checker struct {
 	patVariant  map[Pattern]bool     // IdentPat that matches a unit variant (not a binding)
 	cycleDone   map[*StructDecl]bool // structs already reported on an infinite-size cycle
 	preludeVars map[Expr]bool        // idents bound in the prelude (ms, second, minute)
+	// multi-result calls: the full result list of a call returning >1
+	// value, recorded so a, b := f() / return f() can distribute;
+	// multiAllow is that one call while its distribution context checks it
+	multiResults map[*CallExpr][]Type
+	multiAllow   *CallExpr
 	// §3 imports: qualifier -> dependency checker (checked before the
 	// importer, so its funcs/ctors/enums tables are complete)
 	imports     map[string]*checker
@@ -1599,6 +1604,36 @@ func (c *checker) checkStmt(s Stmt) {
 		c.cur.vars[st.Name] = ty
 		c.recordDecl(st.Name, st.Line, 0)
 	case *AssignStmt:
+		// multi-result distribution: a, b := f() / a, b = f() where the
+		// single rhs call yields exactly one value per target
+		if len(st.Rhs) == 1 && len(st.Lhs) > 1 && (st.Op == ":=" || st.Op == "=") {
+			if ce, ok := st.Rhs[0].(*CallExpr); ok {
+				if res := c.checkDistributed(ce); res != nil {
+					if len(res) != len(st.Lhs) {
+						c.diag.errorfAt(st.Line, st.Col, "assignment mismatch: %d left, %d right", len(st.Lhs), len(res))
+						return
+					}
+					for i := range st.Lhs {
+						if st.Op == ":=" {
+							id, ok := st.Lhs[i].(*Ident)
+							if !ok {
+								c.diag.errorfAt(st.Line, st.Col, "left side of := must be a name")
+								continue
+							}
+							c.declareShort(id, res[i]) // _ is not bound
+						} else {
+							if id, ok := st.Lhs[i].(*Ident); ok && id.Name == "_" {
+								continue
+							}
+							lt := c.checkExpr(st.Lhs[i])
+							c.expect(res[i], lt, lineOf(st.Rhs[0]), colOf(st.Rhs[0]))
+						}
+					}
+					return
+				}
+				// not a multi-result call: fall through to the arity error
+			}
+		}
 		if len(st.Lhs) != len(st.Rhs) {
 			c.diag.errorfAt(st.Line, st.Col, "assignment mismatch: %d left, %d right", len(st.Lhs), len(st.Rhs))
 			return
@@ -1705,6 +1740,8 @@ func (c *checker) checkStmt(s Stmt) {
 	case *ExprStmt:
 		if te, ok := st.X.(*TryExpr); ok {
 			c.checkTry(te) // value discarded; Err still propagates
+		} else if ce, ok := st.X.(*CallExpr); ok {
+			c.checkDistributed(ce) // a call statement may discard many results
 		} else {
 			c.checkExpr(st.X)
 		}
@@ -1742,7 +1779,11 @@ func (c *checker) checkStmt(s Stmt) {
 		c.loopDepth--
 		c.pop()
 	case *DeferStmt:
-		c.checkExpr(st.X)
+		if ce, ok := st.X.(*CallExpr); ok {
+			c.checkDistributed(ce) // deferred results are discarded
+		} else {
+			c.checkExpr(st.X)
+		}
 	case *ContinueStmt:
 		if c.inLoop == 0 {
 			c.diag.errorfAt(st.Line, st.Col, "continue outside of a loop")
@@ -1763,6 +1804,26 @@ func (c *checker) checkStmt(s Stmt) {
 			return
 		}
 		if len(st.Results) != len(c.curResults) {
+			// return f(): the call's results spread over the declared
+			// results when the arity lines up
+			if len(st.Results) == 1 && len(c.curResults) > 1 {
+				if ce, ok := st.Results[0].(*CallExpr); ok {
+					if res := c.checkDistributed(ce); res != nil {
+						if len(res) != len(c.curResults) {
+							c.diag.errorfAt(st.Line, st.Col, "return has %d value(s), function declares %d", len(res), len(c.curResults))
+							return
+						}
+						for i, rt := range res {
+							before := len(c.diag.items)
+							c.expect(rt, c.curResults[i], lineOf(ce), colOf(ce))
+							for k := before; k < len(c.diag.items); k++ {
+								c.diag.items[k].note(c.curFuncLine, 0, "because of the return type declared here")
+							}
+						}
+						return
+					}
+				}
+			}
 			c.diag.errorfAt(st.Line, st.Col, "return has %d value(s), function declares %d", len(st.Results), len(c.curResults))
 			return
 		}
@@ -2383,6 +2444,61 @@ func editDistance(a, b string) int {
 	return prev[len(br)]
 }
 
+// callResult records the result list of a call to a multi-result function
+// so a distribution context (a, b := f(), return f()) can consume it, and
+// reports the Go-style error when such a call lands in a single-value
+// context. The single-value type of the call (its first result) is what
+// callers get back either way.
+func (c *checker) callResult(ex *CallExpr, results []Type) Type {
+	if len(results) == 0 {
+		return tvoid
+	}
+	if len(results) > 1 {
+		if c.multiAllow != ex {
+			c.diag.errorfAt(ex.Line, ex.Col, "multiple-value %s in single-value context", callName(ex))
+		}
+		if c.multiResults == nil {
+			c.multiResults = map[*CallExpr][]Type{}
+		}
+		c.multiResults[ex] = results
+	}
+	return results[0]
+}
+
+// callName renders the callee of a call for diagnostics: f(), o.m(),
+// pkg.F(), f[int]().
+func callName(ex *CallExpr) string {
+	switch fun := ex.Fun.(type) {
+	case *Ident:
+		return fun.Name + "()"
+	case *SelectorExpr:
+		if id, ok := fun.X.(*Ident); ok {
+			return id.Name + "." + fun.Sel + "()"
+		}
+		return fun.Sel + "()"
+	case *IndexExpr:
+		// generic instantiation: f[int](...) — name the function
+		if id, ok := fun.X.(*Ident); ok {
+			return id.Name + "()"
+		}
+	}
+	return "call"
+}
+
+// checkDistributed checks the single call of a distribution context
+// (a, b := f(); a, b = f(); return f()) and returns its full result list,
+// or nil when the expression yields at most one value. While it runs, the
+// one call is exempt from the single-value-context error — nested calls
+// (arguments, receivers) are not.
+func (c *checker) checkDistributed(ce *CallExpr) []Type {
+	c.multiAllow = ce
+	c.checkExpr(ce)
+	c.multiAllow = nil
+	res := c.multiResults[ce]
+	delete(c.multiResults, ce)
+	return res
+}
+
 // checkCall checks a call. want is the expected type in CHECK mode (nil in
 // infer mode) — generic constructors use it to seed type-arg inference.
 func (c *checker) checkCall(ex *CallExpr, want Type) Type {
@@ -2510,10 +2626,7 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 				return c.callGenericFunc(ex, fun.Name, ft, nil, want)
 			}
 			c.checkCallArgs(ex, ft.params)
-			if len(ft.results) > 0 {
-				return ft.results[0]
-			}
-			return tvoid
+			return c.callResult(ex, ft.results)
 		}
 		if ct, ok := c.ctors[fun.Name]; ok {
 			return c.callVariantCtor(ex, fun, fun.Name, c, ct, nil, want)
@@ -2623,10 +2736,7 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 		}
 		if m := c.methodOf(xt, fun.Sel); m != nil { // §8 behavior impls
 			c.checkCallArgs(ex, m.params)
-			if len(m.results) > 0 {
-				return m.results[0]
-			}
-			return tvoid
+			return c.callResult(ex, m.results)
 		}
 		c.diag.errorfAt(ex.Line, ex.Col, "%s has no method %s", xt, fun.Sel)
 		return terr
@@ -2666,10 +2776,7 @@ func (c *checker) checkQualifiedCall(ex *CallExpr, fun *SelectorExpr, id *Ident,
 	if ft, ok := dep.funcs[name]; ok {
 		c.qualified[fun] = id.Name
 		c.checkCallArgs(ex, ft.params)
-		if len(ft.results) > 0 {
-			return ft.results[0]
-		}
-		return tvoid
+		return c.callResult(ex, ft.results)
 	}
 	if ct, ok := dep.ctors[name]; ok && !dep.prelude[ct.enum] {
 		return c.callVariantCtor(ex, fun, name, dep, ct, nil, want)
@@ -2792,10 +2899,11 @@ func (c *checker) callGenericFunc(ex *CallExpr, name string, ft *tFunc, targs []
 			c.checkAgainst(ex.Args[i], pt)
 		}
 	}
-	if len(ft.results) == 0 {
-		return tvoid
+	results := make([]Type, len(ft.results))
+	for i, r := range ft.results {
+		results[i] = subst(r, ft.typeParams, targs)
 	}
-	return subst(ft.results[0], ft.typeParams, targs)
+	return c.callResult(ex, results)
 }
 
 // inferTypeArgs solves a generic constructor's type arguments without a
