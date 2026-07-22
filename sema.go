@@ -620,7 +620,16 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 				c.curTypeParams = en.TypeParams
 			}
 		} else {
-			rt = &tStruct{decl: c.structs[tn]}
+			st := c.structs[tn]
+			rt = &tStruct{decl: st}
+			if len(st.TypeParams) > 0 { // generic struct impl: T is in scope
+				var args []Type
+				for _, tp := range st.TypeParams {
+					args = append(args, tTypeParam{tp})
+				}
+				rt = &tStruct{decl: st, args: args}
+				c.curTypeParams = st.TypeParams
+			}
 		}
 		for _, m := range imp.Methods {
 			ft := c.methods[tn][m.Name]
@@ -710,7 +719,12 @@ func (c *checker) methodOf(ty Type, name string) *tFunc {
 		}
 	case *tStruct:
 		if ms := c.methods[t.decl.Name]; ms != nil {
-			return ms[name]
+			if m := ms[name]; m != nil {
+				if len(t.args) > 0 { // generic impl: instantiate the sig
+					return substFunc(m, t.decl.TypeParams, t.args)
+				}
+				return m
+			}
 		}
 	case tTypeParam:
 		bound := c.curBounds[t.name]
@@ -975,11 +989,30 @@ func (c *checker) registerImpls(f *File) {
 				rt = &tEnum{decl: en}
 			}
 		} else if st, ok := c.structs[tn]; ok {
-			if genParams != nil {
-				c.diag.errorf(imp.Line, "%s is not generic", tn)
-				continue
+			if len(st.TypeParams) > 0 {
+				if genParams == nil {
+					c.diag.errorf(imp.Line, "impl for generic %s needs its type parameters: impl %s for %s[%s]",
+						tn, imp.Behavior, tn, strings.Join(st.TypeParams, ", "))
+					continue
+				}
+				if strings.Join(genParams, ",") != strings.Join(st.TypeParams, ",") {
+					c.diag.errorf(imp.Line, "impl for %s must use its type parameters in order: impl %s for %s[%s]",
+						tn, imp.Behavior, tn, strings.Join(st.TypeParams, ", "))
+					continue
+				}
+				var args []Type
+				for _, tp := range st.TypeParams {
+					args = append(args, tTypeParam{tp})
+				}
+				rt = &tStruct{decl: st, args: args}
+				c.curTypeParams = st.TypeParams // T in scope for the impl's sigs
+			} else {
+				if genParams != nil {
+					c.diag.errorf(imp.Line, "%s is not generic", tn)
+					continue
+				}
+				rt = &tStruct{decl: st}
 			}
-			rt = &tStruct{decl: st}
 		} else {
 			c.diag.errorf(imp.Line, "impl target %s is not a local enum or struct (the orphan rule)", tn)
 			continue

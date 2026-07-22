@@ -11,11 +11,27 @@ type Wrap[T] struct {
     Val T
 }
 
+func p0() Pair[int] {
+    return Pair[int]{First: 0, Second: 0}
+}
+
 func Swap[T](p Pair[T]) Pair[T] {
     return Pair[T]{First: p.Second, Second: p.First}
 }
 
+behavior Shower {
+    Show(self) string
+}
+
+impl Shower for Pair[T] {
+    Show(self) string {
+        return "pair"
+    }
+}
+
 func main() {
+    println(p0().Show())
+    println(Pair[string]{First: "a", Second: "b"}.Show())
     p := Pair[int]{First: 1, Second: 2}
     println(p.First, p.Second)
     s := Swap(p)

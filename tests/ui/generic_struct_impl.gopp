@@ -1,0 +1,25 @@
+package main
+
+// impls on generic structs: error paths.
+
+type Pair[T] struct {
+    First T
+}
+
+behavior Shower {
+    Show(self) string
+}
+
+impl Shower for Pair[X] { //~ ERROR impl for Pair must use its type parameters in order: impl Shower for Pair[T]
+    Show(self) string {
+        return "x"
+    }
+}
+
+impl Shower for Pair { //~ ERROR impl for generic Pair needs its type parameters: impl Shower for Pair[T]
+    Show(self) string {
+        return "y"
+    }
+}
+
+func main() {}

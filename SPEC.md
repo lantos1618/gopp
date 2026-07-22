@@ -122,7 +122,7 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   (`Pair[int]{First: 1}`, `p.First` is int), nested instantiations work
   (`Pair[Pair[int]]`), and generic-function inference sees through them
   (`Swap(p)` solves `T=int`).
-- Deferred: impls on generic structs (enums only for now).
+- Impls work on generic structs too: `impl B for Pair[T]` (same rules as generic enums).
 
 ## Behaviors (§8)
 
