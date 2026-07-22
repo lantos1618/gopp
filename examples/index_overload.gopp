@@ -1,0 +1,42 @@
+package main
+
+// §14 leftover: indexing overloads. An impl defining `index` enables
+// g[i, j] reads; `set` enables g[i] = v writes. Behavior signatures are
+// user-defined, so any container shape and element type works.
+
+type Grid struct {
+    W     int
+    H     int
+    Cells map[int]int
+}
+
+behavior Indexable {
+    index(self, x int, y int) int
+    set(self, x int, y int, v int)
+}
+
+impl Indexable for Grid {
+    index(self, x int, y int) int {
+        return self.Cells[y*self.W+x]
+    }
+    set(self, x int, y int, v int) {
+        self.Cells[y*self.W+x] = v
+    }
+}
+
+func NewGrid(w int, h int) Grid {
+    var c map[int]int
+    return Grid{W: w, H: h, Cells: c}
+}
+
+func main() {
+    g := NewGrid(3, 3)
+    g[1, 1] = 5
+    g[2, 2] = 9
+    println(g[1, 1])
+    println(g[2, 2])
+    println(g[0, 0]) // maps are never nil, zero value reads back
+    g[1, 1] = g[1, 1] + 1
+    println(g[1, 1])
+}
+

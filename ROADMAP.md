@@ -76,8 +76,9 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
 2. ~~stdlib v1 (str, conv + native FFI)~~ ✅ · ~~generic impls~~ ✅ ·
    ~~compound assign (+ sema leak fix)~~ ✅
 3. ~~default method bodies (§23-lite)~~ ✅
-4. **Leftovers** — cross-package impls, indexing overloads; **LSP v2**;
-   **§17 interning**.
+4. ~~indexing overloads (`index`/`set` methods)~~ ✅
+5. **LSP v2**; **§17 interning**. Cross-package impls: DECLINED (Go
+   methods must live in the type's package — SPEC.md).
 3. **§17 interning + §1 integer IDs** — when compile times or LSP make
    them pay; both are wrappers, not rewrites, by design.
 4. **LSP v2** — import-aware analysis, local-var definitions, column

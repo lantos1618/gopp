@@ -105,7 +105,14 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - Compound assignment desugars too: `v += u` is `v = v.add(u)`. A
   compound-assignable type without the impl is now a sema error (it used
   to slip through to a Go compile error — the leak is closed).
-- Deferred: indexing operators, shifts on user types.
+- Indexing overloads: an impl defining `index` enables `g[i, j]` reads
+  (any arity, any element type — the behavior's signatures are
+  user-defined); `set` enables `g[i] = v` writes. Write without `set` is
+  "cannot assign to index (no set method)"; compound assignment to an
+  overloaded index is rejected (no read-modify-write desugar).
+- Deferred: shifts on user types, cross-package impls (Go methods must
+  live in the type's package — deliberately NOT relaxed, like Rust's
+  orphan rule but stricter).
 
 ## Behaviors (§8)
 

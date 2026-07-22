@@ -1306,10 +1306,36 @@ func (c *checker) checkStmt(s Stmt) {
 					c.checkExpr(st.Rhs[i])
 					continue
 				}
+				// §14: g[i] = v on a type with a set method -> g.set(i, v)
+				if st.Op == "=" {
+					if ix, ok := st.Lhs[i].(*IndexExpr); ok {
+						xt := c.checkExpr(ix.X)
+						if m := c.methodOf(xt, "set"); m != nil {
+							if len(ix.Index)+1 != len(m.params) {
+								c.diag.errorfAt(ix.Line, ix.Col, "set on %s takes %d argument(s), got %d", xt, len(m.params), len(ix.Index)+1)
+							} else {
+								for k, arg := range ix.Index {
+									c.checkAgainst(arg, m.params[k])
+								}
+								c.checkAgainst(st.Rhs[i], m.params[len(m.params)-1])
+							}
+							c.operatorOps[st.Lhs[i]] = "set"
+							continue
+						}
+						if c.methodOf(xt, "index") != nil {
+							c.diag.errorfAt(ix.Line, ix.Col, "cannot assign to index of %s (no set method)", xt)
+							continue
+						}
+					}
+				}
 				lt := c.checkExpr(st.Lhs[i])
 				if st.Op == "=" {
 					c.checkAgainst(st.Rhs[i], lt)
 				} else { // +=, -=, ...
+					if ix, ok := st.Lhs[i].(*IndexExpr); ok && c.operatorOps[ix] != "" {
+						c.diag.errorfAt(ix.Line, ix.Col, "compound assignment to an overloaded index is not supported")
+						continue
+					}
 					rt := c.checkExpr(st.Rhs[i])
 					// §14: compound assignment desugars to x = x.op(y)
 					base := st.Op[:1]
@@ -2563,6 +2589,22 @@ func (c *checker) checkIndex(ex *IndexExpr) Type {
 	xt := c.checkExpr(ex.X)
 	if isErr(xt) {
 		return terr
+	}
+	// §14: an `index` method overloads the read form — g[i, j] desugars
+	// to g.index(i, j), so any container shape works
+	if m := c.methodOf(xt, "index"); m != nil {
+		if len(ex.Index) != len(m.params) {
+			c.diag.errorfAt(ex.Line, ex.Col, "index on %s takes %d index(es), got %d", xt, len(m.params), len(ex.Index))
+			return terr
+		}
+		for i, ix := range ex.Index {
+			c.checkAgainst(ix, m.params[i])
+		}
+		c.operatorOps[ex] = "index"
+		if len(m.results) > 0 {
+			return m.results[0]
+		}
+		return tvoid
 	}
 	if len(ex.Index) != 1 {
 		c.diag.errorfAt(ex.Line, ex.Col, "expected 1 index")

@@ -1,0 +1,26 @@
+package main
+
+// indexing overloads: error paths.
+
+type Grid struct {
+    Cells map[int]int
+}
+
+behavior Indexable {
+    index(self, x int, y int) int
+}
+
+impl Indexable for Grid {
+    index(self, x int, y int) int {
+        return self.Cells[y+x]
+    }
+}
+
+func main() {
+    var g Grid
+    println(g[1]) //~ ERROR index on Grid takes 2 index(es), got 1
+    println(g[1, 2])
+    g[1, 2] = 5 //~ ERROR cannot assign to index of Grid (no set method)
+    g[1, 2] += 1 //~ ERROR compound assignment to an overloaded index is not supported
+}
+

@@ -480,6 +480,17 @@ func (e *emitter) emitStmt(s Stmt) {
 		}
 		if len(st.Lhs) == 1 {
 			if mn, ok := e.c.operatorOps[st.Lhs[0]]; ok {
+				ix, isIndex := st.Lhs[0].(*IndexExpr)
+				if isIndex && mn == "set" {
+					// §14 overloaded index write: g[i] = v -> g.set(i, v)
+					var args []string
+					for _, i := range ix.Index {
+						args = append(args, e.expr(i))
+					}
+					args = append(args, e.expr(st.Rhs[0]))
+					e.s("%s.set(%s)\n", e.expr(ix.X), strings.Join(args, ", "))
+					return
+				}
 				// §14 compound assignment: x += y -> x = x.add(y)
 				e.s("%s = %s.%s(%s)\n", lhs[0], lhs[0], mn, rhs[0])
 				return
@@ -639,6 +650,14 @@ func (e *emitter) expr(x Expr) string {
 		}
 		return e.expr(ex.X) + "." + ex.Sel
 	case *IndexExpr:
+		if mn, ok := e.c.operatorOps[ex]; ok {
+			// §14 overloaded index read: g[i, j] -> g.index(i, j)
+			var idx []string
+			for _, i := range ex.Index {
+				idx = append(idx, e.expr(i))
+			}
+			return e.expr(ex.X) + "." + mn + "(" + strings.Join(idx, ", ") + ")"
+		}
 		if id, ok := ex.X.(*Ident); ok {
 			if ct, ok := e.c.resolved[id]; ok {
 				// generic constructor instantiation: Ok[int, string]

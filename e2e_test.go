@@ -178,6 +178,14 @@ func TestEndToEndDefaultMethod(t *testing.T) {
 	}
 }
 
+func TestEndToEndIndexOverload(t *testing.T) {
+	got := compileAndRun(t, "examples/index_overload.gopp")
+	want := "5\n9\n0\n6\n"
+	if got != want {
+		t.Fatalf("index_overload.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
 // writePkg makes a one-file package in dir/name for loader unit tests.
 func writePkg(t *testing.T, dir, name, src string) {
 	t.Helper()
