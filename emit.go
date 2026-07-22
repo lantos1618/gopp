@@ -590,6 +590,8 @@ func (e *emitter) emitStmt(s Stmt) {
 		}
 		e.emitStmts(st.Body.List)
 		e.s("}\n")
+	case *DeferStmt:
+		e.s("defer %s\n", e.expr(st.X))
 	case *ContinueStmt:
 		e.s("continue\n")
 	case *BreakStmt:
@@ -748,6 +750,15 @@ func (e *emitter) expr(x Expr) string {
 		}
 		e.needGopp = true
 		return "gopp.Str(" + strings.Join(parts, ", ") + ")"
+	case *SliceExpr:
+		low, high := "", ""
+		if ex.Low != nil {
+			low = e.expr(ex.Low)
+		}
+		if ex.High != nil {
+			high = e.expr(ex.High)
+		}
+		return e.expr(ex.X) + "[" + low + ":" + high + "]"
 	case *MapLitExpr:
 		parts := make([]string, len(ex.Entries))
 		for i, en := range ex.Entries {
@@ -1171,6 +1182,14 @@ func renameExpr(x Expr, from, to string) {
 		for _, en := range ex.Entries {
 			renameExpr(en.Key, from, to)
 			renameExpr(en.Value, from, to)
+		}
+	case *SliceExpr:
+		if ex.Low != nil {
+			renameExpr(ex.Low, from, to)
+		}
+		renameExpr(ex.X, from, to)
+		if ex.High != nil {
+			renameExpr(ex.High, from, to)
 		}
 	}
 }

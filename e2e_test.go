@@ -390,3 +390,19 @@ func TestEndToEndJsonDemo(t *testing.T) {
 		t.Fatalf("jsondemo output:\n got %q\nwant %q", got, want)
 	}
 }
+
+func TestEndToEndDefer(t *testing.T) {
+	got := compileAndRun(t, "examples/defer.gopp")
+	want := "body\ncleanup a\ncleanup b\ncleanup c\n"
+	if got != want {
+		t.Fatalf("defer.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestEndToEndSlicing(t *testing.T) {
+	got := compileAndRun(t, "examples/slicing.gopp")
+	want := "hello\ngopp\nhello gopp\n2\n3\n"
+	if got != want {
+		t.Fatalf("slicing.gopp output:\n got %q\nwant %q", got, want)
+	}
+}

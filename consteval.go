@@ -92,6 +92,8 @@ func lineOf(e Expr) int {
 		return ex.Line
 	case *MapLitExpr:
 		return ex.Line
+	case *SliceExpr:
+		return ex.Line
 	case *SliceLitExpr:
 		return ex.Line
 	case *MakeChanExpr:
@@ -129,6 +131,8 @@ func colOf(e Expr) int {
 	case *StringInterpExpr:
 		return ex.Col
 	case *MapLitExpr:
+		return ex.Col
+	case *SliceExpr:
 		return ex.Col
 	case *SliceLitExpr:
 		return ex.Col

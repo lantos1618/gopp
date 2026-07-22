@@ -286,7 +286,10 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   outside any loop is a sema error). Comptime for-in is unchanged
   (lists, single variable).
 - Strings index as bytes: `s[i]` is a `byte` (Go semantics; bounds are
-  the runtime's problem).
+  the runtime's problem). Slicing works on strings and slices:
+  `s[i:j]`, `s[i:]`, `s[:j]`, `s[:]` — bounds must be numeric.
+- `defer f(...)` runs at function exit, LIFO, Go semantics. The argument
+  must be a call expression.
 
 ## Flow (§9)
 

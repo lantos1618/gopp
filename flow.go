@@ -372,6 +372,8 @@ func stmtLine(s Stmt) int {
 		return st.Line
 	case *ContinueStmt:
 		return st.Line
+	case *DeferStmt:
+		return st.Line
 	case *ReturnStmt:
 		return st.Line
 	case *IncDecStmt:

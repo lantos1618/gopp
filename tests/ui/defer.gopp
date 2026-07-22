@@ -1,0 +1,9 @@
+package main
+
+// defer: error paths.
+
+func main() {
+    x := 1
+    defer x //~ ERROR defer requires a call expression
+    println(x)
+}

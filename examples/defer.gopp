@@ -1,0 +1,14 @@
+package main
+
+// defer: runs at function exit, LIFO, Go semantics.
+
+func cleanup(name string) {
+    println("cleanup", name)
+}
+
+func main() {
+    defer cleanup("c")
+    defer cleanup("b")
+    defer cleanup("a")
+    println("body")
+}

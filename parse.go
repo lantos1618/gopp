@@ -619,7 +619,14 @@ func (p *parser) parseStmt() Stmt {
 	case "continue":
 		tk := p.next()
 		return &ContinueStmt{Line: tk.line, Col: tk.col}
-	case "go", "defer", "const", "type", "import", "goto":
+	case "defer":
+		tk := p.next()
+		x := p.parseExpr(1)
+		if _, isCall := x.(*CallExpr); !isCall {
+			p.errorft(tk, "defer requires a call expression")
+		}
+		return &DeferStmt{X: x, Line: tk.line, Col: tk.col}
+	case "go", "const", "type", "import", "goto":
 		p.errorft(tk, "%q is not supported in v2 yet", tk.text)
 	}
 	lhs := p.parseExprList()
@@ -1025,7 +1032,28 @@ func (p *parser) parsePostfix() Expr {
 			x = &CallExpr{Fun: x, Args: p.parseCallArgs(), Line: tk.line, Col: tk.col}
 		case "[":
 			p.next()
-			idx := p.parseExprList()
+			// x[i] indexing, or x[low:high] slicing (either side omittable)
+			var low, high Expr
+			if p.cur().text != ":" && p.cur().text != "]" {
+				low = p.parseExpr(1)
+			}
+			if p.cur().text == ":" {
+				p.next()
+				if p.cur().text != "]" {
+					high = p.parseExpr(1)
+				}
+				p.expect("]")
+				x = &SliceExpr{X: x, Low: low, High: high, Line: tk.line, Col: tk.col}
+				continue
+			}
+			if low == nil {
+				p.errorft(p.cur(), "expected an index or a slice range")
+			}
+			idx := []Expr{low}
+			for p.cur().text == "," {
+				p.next()
+				idx = append(idx, p.parseExpr(1))
+			}
 			p.expect("]")
 			x = &IndexExpr{X: x, Index: idx, Line: tk.line, Col: tk.col}
 		case "?":

@@ -1,0 +1,11 @@
+package main
+
+func main() {
+    s := "hello gopp"
+    println(s[0:5])
+    println(s[6:])
+    println(s[:])
+    xs := [int]{1, 2, 3, 4}
+    println(len(xs[1:3]))
+    println(xs[2:][0])
+}

@@ -1539,6 +1539,8 @@ func (c *checker) checkStmt(s Stmt) {
 		c.inLoop--
 		c.loopDepth--
 		c.pop()
+	case *DeferStmt:
+		c.checkExpr(st.X)
 	case *ContinueStmt:
 		if c.inLoop == 0 {
 			c.diag.errorfAt(st.Line, st.Col, "continue outside of a loop")
@@ -1994,6 +1996,8 @@ func (c *checker) checkExpr(e Expr) Type {
 			}
 		}
 		ty = tstring
+	case *SliceExpr:
+		ty = c.checkSlice(ex)
 	case *MapLitExpr:
 		kt := c.resolveType(ex.K)
 		vt := c.resolveType(ex.V)
@@ -2885,6 +2889,35 @@ func (c *checker) checkQualifiedValue(ex *SelectorExpr, id *Ident, dep *checker)
 		return ft
 	}
 	c.diag.errorfAt(ex.Line, ex.Col, "undefined: %s.%s", id.Name, name)
+	return terr
+}
+
+// checkSlice checks x[low:high]: strings slice to strings, slices to
+// the same slice type; bounds must be numeric (and are the runtime's
+// problem, like Go).
+func (c *checker) checkSlice(ex *SliceExpr) Type {
+	xt := c.checkExpr(ex.X)
+	if isErr(xt) {
+		return terr
+	}
+	for _, b := range []Expr{ex.Low, ex.High} {
+		if b == nil {
+			continue
+		}
+		bt := c.checkExpr(b)
+		if !isErr(bt) && !isNumeric(bt) {
+			c.diag.errorfAt(lineOf(b), colOf(b), "slice bound must be a number, got %s", bt)
+		}
+	}
+	switch t := xt.(type) {
+	case tBasic:
+		if xt == tstring {
+			return tstring
+		}
+	case *tSlice:
+		return t
+	}
+	c.diag.errorfAt(ex.Line, ex.Col, "cannot slice %s", xt)
 	return terr
 }
 

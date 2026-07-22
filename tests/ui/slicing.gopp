@@ -1,0 +1,10 @@
+package main
+
+// slicing: error paths.
+
+func main() {
+    s := "hello"
+    println(s["a":]) //~ ERROR slice bound must be a number, got string
+    n := 5
+    println(n[0:2]) //~ ERROR cannot slice int
+}

@@ -234,6 +234,13 @@ type ContinueStmt struct {
 	Col  int
 }
 
+// DeferStmt is `defer call(...)` — runs at function exit, Go semantics.
+type DeferStmt struct {
+	X    Expr
+	Line int
+	Col  int
+}
+
 type BreakStmt struct {
 	Label string // "" = plain break, "loop" = innermost go++ loop
 	Line  int
@@ -263,6 +270,7 @@ func (*ForInStmt) stmtNode()    {}
 func (*LoopStmt) stmtNode()     {}
 func (*BreakStmt) stmtNode()    {}
 func (*ContinueStmt) stmtNode() {}
+func (*DeferStmt) stmtNode()    {}
 func (*ReturnStmt) stmtNode()   {}
 func (*IncDecStmt) stmtNode()   {}
 
@@ -403,6 +411,7 @@ func (*MatchExpr) exprNode()        {}
 func (*StructLitExpr) exprNode()    {}
 func (*StringInterpExpr) exprNode() {}
 func (*MapLitExpr) exprNode()       {}
+func (*SliceExpr) exprNode()        {}
 func (*SliceLitExpr) exprNode()     {}
 func (*TryExpr) exprNode()          {}
 func (*ComptimeExpr) exprNode()     {}
@@ -507,4 +516,13 @@ type MapEntry struct {
 	Key   Expr
 	Value Expr
 	Line  int
+}
+
+// SliceExpr is x[low:high] — either bound may be nil (x[:high], x[low:], x[:]).
+type SliceExpr struct {
+	X    Expr
+	Low  Expr
+	High Expr
+	Line int
+	Col  int
 }
