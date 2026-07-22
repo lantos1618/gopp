@@ -90,6 +90,14 @@ func TestEndToEndTry(t *testing.T) {
 	}
 }
 
+func TestEndToEndMultiRes(t *testing.T) {
+	got := compileAndRun(t, "examples/multires.gopp")
+	want := "one 1\n3 2\n3 1\n1\n16 4\n"
+	if got != want {
+		t.Fatalf("multires.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestEndToEndComptime(t *testing.T) {
 	got := compileAndRun(t, "examples/comptime.gopp")
 	want := "7\n1048576\ngo++\ntrue\n42\n2\n3000\n60ns\nabc\n"
