@@ -489,6 +489,12 @@ drop order) do not apply and are deliberately deleted from the roadmap.
 - `programs/goparse` — the recursive-descent parser, in go++ (golden
   AST dump; pointer-based AST — recursive enums need *Expr). v1 scope:
   func/enum/struct decls, statements, match, all expression forms.
+- `goparse -check` (check.gopp) — sema-lite, a type checker in go++:
+  scopes, func sigs, enums/structs, full expression typing, match
+  unification. v1 limits: no channel-arm typing, no guard analysis, no
+  generic payload tracking (prelude ctor payloads are lenient), no
+  positions in diagnostics (the AST keeps no lines yet).
+- Language builtin `has(m[k])` — map presence check (go++'s comma-ok).
 - `examples/jsondemo` — a pure-go++ JSON parser in the stdlib plus
   comptime-generated (un)marshalers.
 - The compiler itself remains Go; these programs are the proof of

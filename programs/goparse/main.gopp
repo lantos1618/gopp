@@ -23,6 +23,7 @@ enum Expr {
     ESlice(x *Expr, lo *Expr, hi *Expr)
     ESliceLit(elem string, vals [Expr])
     EMapLit(ktype string, vtype string, keys [Expr], vals [Expr])
+    EMakeChan(elem string, cap *Expr)
     EStructLit(tname string, names [string], vals [Expr])
     EMatch(subj *Expr, arms [Arm])
     ETry(x *Expr)
@@ -555,6 +556,19 @@ func parsePrimary(p *Parser) Expr {
         expect(p, "}}")
         return ESliceLit(elem, vals)
     }
+    if t.Text == "chan" {
+        advance(p)
+        expect(p, "<")
+        elem := parseType(p)
+        expect(p, ">")
+        expect(p, "(")
+        capE := ENil
+        if cur(p).Text != ")" {
+            capE = parseExpr(p, 1)
+        }
+        expect(p, ")")
+        return EMakeChan(elem, ep(capE))
+    }
     if t.Text == "map" {
         advance(p)
         expect(p, "<")
@@ -937,6 +951,7 @@ func exprText(x *Expr) string {
         EIndex(a, idx) -> iText(a, idx)
         ESlice(a, lo, hi) -> exprText(a) + "[" + exprText(lo) + ":" + exprText(hi) + "]"
         ESliceLit(elem, vals) -> "[" + elem + "]{{" + exprsText(vals) + "}}"
+        EMakeChan(elem, capE) -> "chan<" + elem + ">(" + exprText(capE) + ")"
         EMapLit(k, v, keys, vals) -> "map<" + k + ", " + v + ">{{" + pairsText(keys, vals) + "}}"
         EStructLit(t, names, vals) -> t + "{{" + pairsText2(names, vals) + "}}"
         EMatch(subj, arms) -> matchText(subj, arms)
@@ -1080,15 +1095,36 @@ func enumText(name string, variants [Variant]) string {
 func main() {
     args := os.Args()
     if len(args) < 2 {
-        println("usage: goparse <file.gopp>")
+        println("usage: goparse [-check] <file.gopp>")
         os.Exit(2)
     }
-    r := os.ReadFile(args[1])
+    path := args[1]
+    mode := "dump"
+    if path == "-check" {
+        if len(args) < 3 {
+            println("usage: goparse [-check] <file.gopp>")
+            os.Exit(2)
+        }
+        mode = "check"
+        path = args[2]
+    }
+    r := os.ReadFile(path)
     match r {
         Ok(src) -> {
             toks := lex(src)
             p := Parser{toks: toks, pos: 0}
             decls := parseDecls(&p)
+            if mode == "check" {
+                c := newChecker()
+                checkDecls(c, decls)
+                if len(c.diags) == 0 {
+                    println("ok")
+                }
+                for d in c.diags {
+                    println(d)
+                }
+                return
+            }
             for d in decls {
                 println(declText(d))
             }

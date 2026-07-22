@@ -324,6 +324,7 @@ type checker struct {
 	constVals   map[Expr]constVal    // comptime exprs -> compile-time values (§10)
 	operatorOps map[Expr]string      // overloaded operator exprs -> impl method name (§14)
 	actorCalls  map[Expr]string      // async behavior calls -> behavior name (Pony actors)
+	hasIdx      map[Expr]bool        // has(m[k]) presence checks (emission)
 	patVariant  map[Pattern]bool     // IdentPat that matches a unit variant (not a binding)
 	cycleDone   map[*StructDecl]bool // structs already reported on an infinite-size cycle
 	preludeVars map[Expr]bool        // idents bound in the prelude (ms, second, minute)
@@ -425,6 +426,7 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 		constVals:           map[Expr]constVal{},
 		operatorOps:         map[Expr]string{},
 		actorCalls:          map[Expr]string{},
+		hasIdx:              map[Expr]bool{},
 		patVariant:          map[Pattern]bool{},
 		preludeVars:         map[Expr]bool{},
 		imports:             map[string]*checker{},
@@ -2652,6 +2654,27 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 			}
 			c.checkExpr(ex.Args[0])
 			return tint
+		case "has":
+			// map presence check — go++'s comma-ok replacement
+			if len(ex.Args) != 1 {
+				c.diag.errorfAt(ex.Line, ex.Col, "has takes 1 argument (an index expression)")
+				return terr
+			}
+			ix, ok := ex.Args[0].(*IndexExpr)
+			if !ok {
+				c.diag.errorfAt(ex.Line, ex.Col, "has takes an index expression: has(m[\"key\"])")
+				return terr
+			}
+			xt := c.checkExpr(ix.X)
+			if _, isMap := xt.(*tMap); !isMap {
+				if !isErr(xt) {
+					c.diag.errorfAt(lineOf(ix.X), colOf(ix.X), "has needs a map, got %s", xt)
+				}
+				return terr
+			}
+			c.checkExpr(ix.Index[0])
+			c.hasIdx[ex] = true
+			return tbool
 		case "append":
 			if len(ex.Args) < 1 {
 				c.diag.errorfAt(ex.Line, ex.Col, "append needs arguments")

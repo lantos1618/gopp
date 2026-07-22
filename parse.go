@@ -842,8 +842,8 @@ func (p *parser) parseFor() Stmt {
 	save := p.noStructLit
 	p.noStructLit = true
 	first := p.parseExprList()
-	p.noStructLit = save
 	if p.cur().text == "{" {
+		p.noStructLit = save
 		return &ForStmt{Cond: first[0], Body: p.parseBlock(), Line: line, Col: col}
 	}
 	var init Stmt
@@ -873,6 +873,7 @@ func (p *parser) parseFor() Stmt {
 			post = &ExprStmt{X: e[0], Line: line, Col: col}
 		}
 	}
+	p.noStructLit = save
 	return &ForStmt{Init: init, Cond: cond, Post: post, Body: p.parseBlock(), Line: line, Col: col}
 }
 

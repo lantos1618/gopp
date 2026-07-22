@@ -1,0 +1,1010 @@
+package main
+
+// check.gopp — sema-lite: a type checker for goparse's AST, written in
+// go++. Self-hosting milestone 3. Scope: name resolution (scopes),
+// function signatures, enums/structs, full expression typing with
+// Go's operator rules, match unification, and clear error messages
+// (line-less in v1 — the AST keeps no positions yet).
+
+// ---------- types ----------
+
+enum Type {
+    TInt
+    TFloat
+    TString
+    TBool
+    TByte
+    TVoid
+    TErr
+    TNever
+    TNamed(name string) // a declared enum or struct
+    TSliceE(elem *Type)
+    TMapE(k *Type, v *Type)
+    TChanE(elem *Type)
+    TPtr(x *Type)
+}
+
+func tyText(t Type) string {
+    return match t {
+        TInt -> "int"
+        TFloat -> "float64"
+        TString -> "string"
+        TBool -> "bool"
+        TByte -> "byte"
+        TVoid -> "void"
+        TErr -> "error"
+        TNever -> "never"
+        TNamed(n) -> n
+        TSliceE(e) -> "[" + tyText(*e) + "]"
+        TMapE(k, v) -> "map<" + tyText(*k) + ", " + tyText(*v) + ">"
+        TChanE(e) -> "chan<" + tyText(*e) + ">"
+        TPtr(x) -> "*" + tyText(*x)
+    }
+}
+
+func tp(t Type) *Type { return &t  }
+
+func tyEq(a Type, b Type) bool {
+    if isTErr(a) || isTErr(b) {
+        return true // poison unifies silently
+    }
+    return match a {
+        TInt -> isT(b, TInt())
+        TFloat -> isT(b, TFloat())
+        TString -> isT(b, TString())
+        TBool -> isT(b, TBool())
+        TByte -> isT(b, TByte())
+        TVoid -> isT(b, TVoid())
+        TNever -> isT(b, TNever())
+        TErr -> true
+        TNamed(n) -> match b {
+            TNamed(m) -> n == m
+            _ -> false
+        }
+        TSliceE(e) -> match b {
+            TSliceE(f) -> tyEq(*e, *f)
+            _ -> false
+        }
+        TMapE(k, v) -> match b {
+            TMapE(k2, v2) -> tyEq(*k, *k2) && tyEq(*v, *v2)
+            _ -> false
+        }
+        TChanE(e) -> match b {
+            TChanE(f) -> tyEq(*e, *f)
+            _ -> false
+        }
+        TPtr(x) -> match b {
+            TPtr(y) -> tyEq(*x, *y)
+            _ -> false
+        }
+    }
+}
+
+func isT(t Type, u Type) bool {
+    return match t {
+        TInt -> match u {
+            TInt -> true
+            _ -> false
+        }
+        TFloat -> match u {
+            TFloat -> true
+            _ -> false
+        }
+        TString -> match u {
+            TString -> true
+            _ -> false
+        }
+        TBool -> match u {
+            TBool -> true
+            _ -> false
+        }
+        TByte -> match u {
+            TByte -> true
+            _ -> false
+        }
+        TVoid -> match u {
+            TVoid -> true
+            _ -> false
+        }
+        TNever -> match u {
+            TNever -> true
+            _ -> false
+        }
+        TErr -> match u {
+            TErr -> true
+            _ -> false
+        }
+        TNamed(n) -> match u {
+            TNamed(m) -> n == m
+            _ -> false
+        }
+        TSliceE(e) -> match u {
+            TSliceE(f) -> tyEq(*e, *f)
+            _ -> false
+        }
+        TMapE(k, v) -> match u {
+            TMapE(k2, v2) -> tyEq(*k, *k2) && tyEq(*v, *v2)
+            _ -> false
+        }
+        TChanE(e) -> match u {
+            TChanE(f) -> tyEq(*e, *f)
+            _ -> false
+        }
+        TPtr(x) -> match u {
+            TPtr(y) -> tyEq(*x, *y)
+            _ -> false
+        }
+    }
+}
+
+func isTErr(t Type) bool {
+    return match t {
+        TErr -> true
+        _ -> false
+    }
+}
+
+func isNumeric(t Type) bool {
+    return isT(t, TInt()) || isT(t, TFloat()) || isT(t, TByte())
+}
+
+// parseTypeText turns goparse's type strings back into Types.
+func parseTypeText(s string) Type {
+    if has_prefix(s, "map<") {
+        inner := s[4 : len(s)-1]
+        comma := topComma(inner)
+        return TMapE(tp(parseTypeText(inner[0:comma])), tp(parseTypeText(inner[comma+2:])))
+    }
+    if has_prefix(s, "chan<") {
+        return TChanE(tp(parseTypeText(s[5 : len(s)-1])))
+    }
+    if has_prefix(s, "[") {
+        return TSliceE(tp(parseTypeText(s[1 : len(s)-1])))
+    }
+    if has_prefix(s, "*") {
+        return TPtr(tp(parseTypeText(s[1:])))
+    }
+    if has_suffix(s, "]") {
+        // generic instantiation Named[args] — lite: the name is the type
+        depth := 0
+        for i := 0; i < len(s); i++ {
+            if s[i] == byte('[') && depth == 0 {
+                return TNamed(s[0:i])
+            }
+            if s[i] == byte('[') {
+                depth++
+            }
+            if s[i] == byte(']') {
+                depth--
+            }
+        }
+    }
+    return match s {
+        "int" -> TInt()
+        "int64" -> TInt()
+        "float64" -> TFloat()
+        "string" -> TString()
+        "bool" -> TBool()
+        "byte" -> TByte()
+        "rune" -> TByte()
+        "duration" -> TInt()
+        _ -> TNamed(s)
+    }
+}
+
+// topComma finds the top-level comma in "K, V" (depth 0).
+func topComma(s string) int {
+    depth := 0
+    for i := 0; i < len(s); i++ {
+        if s[i] == byte('<') || s[i] == byte('[') {
+            depth++
+        }
+        if s[i] == byte('>') || s[i] == byte(']') {
+            depth--
+        }
+        if s[i] == byte(',') && depth == 0 {
+            return i
+        }
+    }
+    return len(s)
+}
+
+// ---------- checker ----------
+
+type Env struct {
+    parent *Env
+    isRoot bool
+    vars   map<string, Type>
+}
+
+func envLookup(e *Env, name string) (Type, bool) {
+    cur := e
+    for {
+        if has(cur.vars[name]) {
+            return cur.vars[name], true
+        }
+        if cur.isRoot {
+            break
+        }
+        cur = cur.parent
+    }
+    return TErr(), false
+}
+
+type FuncSig struct {
+    Params  [Type]
+    Results [Type]
+}
+
+type Checker struct {
+    funcs      map<string, FuncSig>
+    enums      map<string, bool>
+    structs    map<string, map<string, Type>>
+    ctors      map<string, string> // variant name -> enum name
+    ctorFields map<string, [Type]>
+    diags      [string]
+    cur        *Env
+    curResults [Type]
+}
+
+func fail(c *Checker, msg string) {
+    c.diags = append(c.diags, msg)
+}
+
+func child(c *Checker, ) {
+    c.cur = &Env{parent: c.cur, vars: map<string, Type>{}}
+}
+
+func pop(c *Checker, ) {
+    c.cur = c.cur.parent
+}
+
+func expectT(c *Checker, got Type, want Type, what string) {
+    if !tyEq(got, want) {
+        fail(c, "expected " + tyText(want) + ", found " + tyText(got) + " (" + what + ")")
+    }
+}
+
+func newChecker() *Checker {
+    return &Checker{
+        cur:        &Env{isRoot: true, vars: map<string, Type>{
+                "ms": TInt(), "second": TInt(), "minute": TInt(),
+        }},
+        funcs:      map<string, FuncSig>{},
+        enums:      map<string, bool>{},
+        structs:    map<string, map<string, Type>>{},
+        ctors: map<string, string>{
+            "Ok": "Result", "Err": "Result", "Some": "Option", "None": "Option",
+        },
+        ctorFields: map<string, [Type]>{
+            "Ok":   [Type]{TErr()},
+            "Err":  [Type]{TErr()},
+            "Some": [Type]{TErr()},
+            "None": [Type]{},
+        },
+    }
+}
+
+func register(c *Checker, decls [Decl]) {
+    for d in decls {
+        match d {
+            DEnum(name, tp, variants) -> {
+                c.enums[name] = true
+                for v in variants {
+                    c.ctors[v.Name] = name
+                    var fts [Type]
+                    for f in v.Fields {
+                        fts = append(fts, parseTypeText(f.Type))
+                    }
+                    c.ctorFields[v.Name] = fts
+                }
+            }
+            DStruct(name, tp, fields) -> {
+                m := map<string, Type>{}
+                for f in fields {
+                    m[f.Name] = parseTypeText(f.Type)
+                }
+                c.structs[name] = m
+            }
+            DFunc(name, tp, params, results, body) -> {
+                var ps [Type]
+                for p in params {
+                    ps = append(ps, parseTypeText(p.Type))
+                }
+                var rs [Type]
+                for r in results {
+                    rs = append(rs, parseTypeText(r.Type))
+                }
+                if has(c.funcs[name]) {
+                    fail(c, "duplicate function " + name)
+                }
+                c.funcs[name] = FuncSig{Params: ps, Results: rs}
+            }
+        }
+    }
+}
+
+func checkDecls(c *Checker, decls [Decl]) {
+    register(c, decls)
+    for d in decls {
+        match d {
+            DFunc(name, tp, params, results, body) -> {
+                sig := c.funcs[name]
+                c.curResults = sig.Results
+                child(c)
+                for i, p in params {
+                    c.cur.vars[p.Name] = sig.Params[i]
+                }
+                checkStmts(c, body)
+                pop(c)
+            }
+            _ -> { continue }
+        }
+    }
+}
+
+func checkStmts(c *Checker, ss [Stmt]) {
+    for s in ss {
+        checkStmt(c, s)
+    }
+}
+
+// ---------- statements ----------
+
+func checkStmt(c *Checker, s Stmt) {
+    match s {
+        SNil -> { return  }
+        SVar(name, tname, init) -> {
+            ty := parseTypeText(tname)
+            if !isENil(init) {
+                it := checkExpr(c, *init)
+                expectT(c, it, ty, "var "+name)
+            }
+            c.cur.vars[name] = ty
+        }
+        SAssign(lhs, op, rhs) -> {
+            if op == ":=" {
+                if len(lhs) != len(rhs) {
+                    fail(c, "assignment mismatch: {len(lhs)} left, {len(rhs)} right")
+                    return
+                }
+                for i, l in lhs {
+                    rt := checkExpr(c, rhs[i])
+                    match l {
+                        EIdent(n) -> { c.cur.vars[n] = rt }
+                        _ -> fail(c, "left side of := must be a name")
+                    }
+                }
+                return
+            }
+            if op == "=" {
+                if len(lhs) != len(rhs) {
+                    fail(c, "assignment mismatch: {len(lhs)} left, {len(rhs)} right")
+                    return
+                }
+                for i, l in lhs {
+                    lt := checkExpr(c, l)
+                    rt := checkExpr(c, rhs[i])
+                    expectT(c, rt, lt, "assignment")
+                }
+                return
+            }
+            // compound: numeric operands
+            lt := checkExpr(c, lhs[0])
+            rt := checkExpr(c, rhs[0])
+            if !isNumeric(lt) && !isT(lt, TString()) {
+                fail(c, "invalid operation: " + tyText(lt) + " " + op)
+            }
+            expectT(c, rt, lt, "compound assignment")
+        }
+        SExprStmt(x) -> {
+            checkExpr(c, *x)
+        }
+        SIf(cond, then, els) -> {
+            ct := checkExpr(c, *cond)
+            expectT(c, ct, TBool(), "if condition")
+            child(c)
+            checkStmts(c, then)
+            pop(c)
+            child(c)
+            checkStmts(c, els)
+            pop(c)
+        }
+        SFor(init, cond, post, body) -> {
+            child(c)
+            checkStmt(c, *init)
+            if !isENil(cond) {
+                ct := checkExpr(c, *cond)
+                expectT(c, ct, TBool(), "for condition")
+            }
+            checkStmt(c, *post)
+            checkStmts(c, body)
+            pop(c)
+        }
+        SLoop(body) -> {
+            child(c)
+            checkStmts(c, body)
+            pop(c)
+        }
+        SForIn(v1, v2, x, body) -> {
+            xt := checkExpr(c, *x)
+            child(c)
+            elem := TErr()
+            key := TInt()
+            match xt {
+                TSliceE(e) -> { elem = *e }
+                TMapE(k, v) -> {
+                    elem = *v
+                    key = *k
+                }
+                TChanE(e) -> { elem = *e }
+                _ -> fail(c, "cannot range over " + tyText(xt) + " (need slice, map, or chan)")
+            }
+            if v2 != "" {
+                if v1 != "_" {
+                    c.cur.vars[v1] = key
+                }
+                if v2 != "_" {
+                    c.cur.vars[v2] = elem
+                }
+            } else if v1 != "_" {
+                c.cur.vars[v1] = elem
+            }
+            checkStmts(c, body)
+            pop(c)
+        }
+        SBreak(label) -> { return  }
+        SContinue -> { return  }
+        SReturn(vals) -> {
+            if len(vals) != len(c.curResults) {
+                fail(c, "return has {len(vals)} value(s), function declares {len(c.curResults)}")
+                return
+            }
+            for i, v in vals {
+                rt := checkExpr(c, v)
+                expectT(c, rt, c.curResults[i], "return")
+            }
+        }
+        SIncDec(x, op) -> {
+            xt := checkExpr(c, *x)
+            if !isNumeric(xt) {
+                fail(c, tyText(xt) + op + " needs a number")
+            }
+        }
+        SDefer(x) -> {
+            checkExpr(c, *x)
+        }
+    }
+}
+
+// ---------- expressions ----------
+
+func checkExpr(c *Checker, x Expr) Type {
+    return match x {
+        ENil -> TVoid()
+        ENum(s) -> numType(s)
+        EStr(s) -> TString()
+        ERune(s) -> TByte()
+        EIdent(name) -> checkIdent(c, name)
+        EBinary(op, a, b) -> checkBinary(c, op, *a, *b)
+        EUnary(op, a) -> checkUnary(c, op, *a)
+        ECall(f, args) -> checkCall(c, *f, args)
+        ESelector(a, sel) -> checkSelector(c, *a, sel)
+        EIndex(a, idx) -> checkIndex(c, *a, idx)
+        ESlice(a, lo, hi) -> checkSliceT(c, *a)
+        ESliceLit(elem, vals) -> checkSliceLit(c, elem, vals)
+        EMapLit(k, v, keys, vals) -> checkMapLit(c, k, v, keys, vals)
+        EStructLit(tname, names, vals) -> checkStructLit(c, tname, names, vals)
+        EMatch(subj, arms) -> checkMatch(c, *subj, arms)
+        ETry(a) -> checkTry(c, *a)
+        EMakeChan(elem, capE) -> checkMakeChan(c, elem, capE)
+    }
+}
+
+func checkMakeChan(c *Checker, elem string, capE *Expr) Type {
+    et := parseTypeText(elem)
+    if !isENil(capE) {
+        ct := checkExpr(c, *capE)
+        if !isNumeric(ct) {
+            fail(c, "channel capacity must be a number, got " + tyText(ct))
+        }
+    }
+    return TChanE(tp(et))
+}
+
+func numType(s string) Type {
+    if contains(s, ".") || contains(s, "e") {
+        return TFloat()
+    }
+    return TInt()
+}
+
+func checkIdent(c *Checker, name string) Type {
+    t, ok := envLookup(c.cur, name)
+    if ok {
+        return t
+    }
+    if name == "true" || name == "false" {
+        return TBool()
+    }
+    if has(c.funcs[name]) {
+        return TNamed("func " + name)
+    }
+    enum, ok2 := ctorOf(c, name)
+    if ok2 {
+        // unit variant value or constructor function
+        if len(c.ctorFields[name]) == 0 {
+            return TNamed(enum)
+        }
+        return TNamed("ctor " + name)
+    }
+    fail(c, "undefined: " + name)
+    return TErr()
+}
+
+func checkBinary(c *Checker, op string, a Expr, b Expr) Type {
+    at := checkExpr(c, a)
+    bt := checkExpr(c, b)
+    if isTErr(at) || isTErr(bt) {
+        return TErr()
+    }
+    if op == "&&" || op == "||" {
+        expectT(c, at, TBool(), "left of "+op)
+        expectT(c, bt, TBool(), "right of "+op)
+        return TBool()
+    }
+    if op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" {
+        if isNumeric(at) && isNumeric(bt) {
+            return TBool()
+        }
+        if isT(at, TString()) && isT(bt, TString()) {
+            return TBool()
+        }
+        if tyEq(at, bt) && (op == "==" || op == "!=") {
+            return TBool()
+        }
+        fail(c, "invalid operation: " + tyText(at) + " " + op + " " + tyText(bt) + " (mismatched types)")
+        return TErr()
+    }
+    if op == "+" {
+        if isNumeric(at) && isNumeric(bt) {
+            return at
+        }
+        if isT(at, TString()) && isT(bt, TString()) {
+            return TString()
+        }
+        fail(c, "invalid operation: " + tyText(at) + " + " + tyText(bt) + " (mismatched types)")
+        return TErr()
+    }
+    if op == "%" || op == "&" || op == "|" || op == "^" || op == "&^" || op == "<<" || op == ">>" {
+        if isT(at, TInt()) && isT(bt, TInt()) {
+            return TInt()
+        }
+        fail(c, "invalid operation: " + tyText(at) + " " + op + " " + tyText(bt) + " (integer operands only)")
+        return TErr()
+    }
+    if isNumeric(at) && isNumeric(bt) {
+        return at
+    }
+    fail(c, "invalid operation: " + tyText(at) + " " + op + " " + tyText(bt) + " (mismatched types)")
+    return TErr()
+}
+
+func checkUnary(c *Checker, op string, a Expr) Type {
+    at := checkExpr(c, a)
+    if isTErr(at) {
+        return TErr()
+    }
+    if op == "!" {
+        expectT(c, at, TBool(), "! operand")
+        return TBool()
+    }
+    if op == "&" {
+        return TPtr(tp(at))
+    }
+    if op == "*" {
+        return match at {
+            TPtr(x) -> *x
+            _ -> derefErr(c, at)
+        }
+    }
+    if isNumeric(at) {
+        return at
+    }
+    fail(c, "invalid operation: " + op + tyText(at))
+    return TErr()
+}
+
+func ctorOf(c *Checker, name string) (string, bool) {
+    if has(c.ctors[name]) {
+        return c.ctors[name], true
+    }
+    return "", false
+}
+
+func derefErr(c *Checker, t Type) Type {
+    fail(c, "cannot dereference " + tyText(t))
+    return TErr()
+}
+
+// ---------- calls, selectors, indexing, literals, match ----------
+
+func checkCall(c *Checker, f Expr, args [Expr]) Type {
+    match f {
+        EIndex(b, idx) -> {
+            // generic constructor instantiation: Err[int, string](v)
+            name := match *b {
+                EIdent(n) -> n
+                _ -> "?"
+            }
+            if has(c.ctors[name]) {
+                for i2 in idx {
+                    _ = i2
+                }
+                fts := c.ctorFields[name]
+                if len(args) != len(fts) {
+                    fail(c, name + " takes {len(fts)} value(s), got {len(args)}")
+                    return TErr()
+                }
+                for i, a in args {
+                    expectT(c, checkExpr(c, a), fts[i], name + " field")
+                }
+                return TNamed(c.ctors[name])
+            }
+            fail(c, "not a generic constructor: " + name)
+            return TErr()
+        }
+        EIdent(name) -> {
+            switch2 := name
+            if switch2 == "println" || switch2 == "print" || switch2 == "panic" {
+                for a in args {
+                    checkExpr(c, a)
+                }
+                return TVoid()
+            }
+            if switch2 == "len" || switch2 == "cap" {
+                if len(args) != 1 {
+                    fail(c, name + " takes 1 argument")
+                    return TErr()
+                }
+                checkExpr(c, args[0])
+                return TInt()
+            }
+            if switch2 == "append" {
+                if len(args) < 1 {
+                    fail(c, "append needs arguments")
+                    return TErr()
+                }
+                st := checkExpr(c, args[0])
+                match st {
+                    TSliceE(e) -> {
+                        for i, a in args {
+                            if i > 0 {
+                                expectT(c, checkExpr(c, a), *e, "append element")
+                            }
+                        }
+                    }
+                    _ -> fail(c, "append needs a slice, got " + tyText(st))
+                }
+                return st
+            }
+            if switch2 == "has" {
+                if len(args) != 1 {
+                    fail(c, "has takes 1 argument")
+                    return TErr()
+                }
+                checkExpr(c, args[0])
+                return TBool()
+            }
+            if switch2 == "assert" || switch2 == "assertEq" {
+                for a in args {
+                    checkExpr(c, a)
+                }
+                return TVoid()
+            }
+            // a declared function
+            if has(c.funcs[name]) {
+                sig := c.funcs[name]
+                if len(args) != len(sig.Params) {
+                    fail(c, name + " takes {len(sig.Params)} argument(s), got {len(args)}")
+                    return TErr()
+                }
+                for i, a in args {
+                    expectT(c, checkExpr(c, a), sig.Params[i], name + " argument")
+                }
+                if len(sig.Results) == 0 {
+                    return TVoid()
+                }
+                return sig.Results[0]
+            }
+            // a variant constructor
+            if has(c.ctors[name]) {
+                enum := c.ctors[name]
+                fts := c.ctorFields[name]
+                if len(args) != len(fts) {
+                    fail(c, name + " takes {len(fts)} value(s), got {len(args)}")
+                    return TErr()
+                }
+                for i, a in args {
+                    expectT(c, checkExpr(c, a), fts[i], name + " field")
+                }
+                return TNamed(enum)
+            }
+            fail(c, "undefined function: " + name)
+            for a in args {
+                checkExpr(c, a)
+            }
+            return TErr()
+        }
+        ESelector(a, sel) -> {
+            // method call: chan methods and Result IsOk/IsErr
+            at := checkExpr(c, *a)
+            match at {
+                TChanE(e) -> {
+                    if sel == "send" {
+                        if len(args) != 1 {
+                            fail(c, "send takes 1 argument")
+                            return TErr()
+                        }
+                        expectT(c, checkExpr(c, args[0]), *e, "send")
+                        return TVoid()
+                    }
+                    if sel == "recv" {
+                        if len(args) != 0 {
+                            fail(c, "recv takes no arguments")
+                            return TErr()
+                        }
+                        return *e
+                    }
+                    if sel == "close" {
+                        return TVoid()
+                    }
+                    fail(c, "channels have no method " + sel)
+                    return TErr()
+                }
+                TNamed(n) -> {
+                    if (sel == "IsOk" || sel == "IsErr") && n == "Result" {
+                        return TBool()
+                    }
+                    fail(c, tyText(at) + " has no method " + sel)
+                    return TErr()
+                }
+                _ -> {
+                    fail(c, tyText(at) + " has no method " + sel)
+                    return TErr()
+                }
+            }
+        }
+        _ -> {
+            fail(c, "not callable")
+            return TErr()
+        }
+    }
+}
+
+func checkSelector(c *Checker, a Expr, sel string) Type {
+    at := checkExpr(c, a)
+    match at {
+        TNamed(n) -> {
+            return selectorNamed(c, n, sel)
+        }
+        TPtr(x) -> {
+            return match *x {
+                TNamed(n) -> selectorNamed(c, n, sel)
+                _ -> selectorErr(c, at, sel)
+            }
+        }
+        _ -> {
+            return selectorErr(c, at, sel)
+        }
+    }
+}
+
+func checkIndex(c *Checker, a Expr, idx [Expr]) Type {
+    at := checkExpr(c, a)
+    match at {
+        TSliceE(e) -> {
+            it := checkExpr(c, idx[0])
+            if !isNumeric(it) {
+                fail(c, "slice index must be a number, got " + tyText(it))
+            }
+            return *e
+        }
+        TMapE(k, v) -> {
+            expectT(c, checkExpr(c, idx[0]), *k, "map index")
+            return *v
+        }
+        TString -> {
+            it := checkExpr(c, idx[0])
+            if !isNumeric(it) {
+                fail(c, "string index must be a number, got " + tyText(it))
+            }
+            return TByte()
+        }
+        _ -> {
+            fail(c, "cannot index " + tyText(at))
+            return TErr()
+        }
+    }
+}
+
+func checkSliceT(c *Checker, a Expr) Type {
+    at := checkExpr(c, a)
+    return match at {
+        TString -> TString()
+        TSliceE(e) -> TSliceE(e)
+        _ -> sliceErr(c, at)
+    }
+}
+
+func sliceErr(c *Checker, t Type) Type {
+    fail(c, "cannot slice " + tyText(t))
+    return TErr()
+}
+
+func checkSliceLit(c *Checker, elem string, vals [Expr]) Type {
+    et := parseTypeText(elem)
+    for v in vals {
+        expectT(c, checkExpr(c, v), et, "slice literal element")
+    }
+    return TSliceE(tp(et))
+}
+
+func checkMapLit(c *Checker, kt string, vt string, keys [Expr], vals [Expr]) Type {
+    k := parseTypeText(kt)
+    v := parseTypeText(vt)
+    for i, key in keys {
+        expectT(c, checkExpr(c, key), k, "map key")
+        expectT(c, checkExpr(c, vals[i]), v, "map value")
+    }
+    return TMapE(tp(k), tp(v))
+}
+
+func checkStructLit(c *Checker, tname string, names [string], vals [Expr]) Type {
+    if !has(c.structs[tname]) {
+        fail(c, "composite literal of non-struct type " + tname)
+        for v in vals {
+            checkExpr(c, v)
+        }
+        return TErr()
+    }
+    fields := c.structs[tname]
+    positional := 0
+    order := [string]{}
+    for fname in structFieldOrder(c, tname) {
+        order = append(order, fname)
+    }
+    for i, n in names {
+        if n == "" {
+            if positional >= len(order) {
+                fail(c, "too many values in " + tname + " literal")
+                checkExpr(c, vals[i])
+                continue
+            }
+            expectT(c, checkExpr(c, vals[i]), fields[order[positional]], tname + " field")
+            positional++
+            continue
+        }
+        if !has(fields[n]) {
+            fail(c, tname + " has no field " + n)
+            checkExpr(c, vals[i])
+            continue
+        }
+        expectT(c, checkExpr(c, vals[i]), fields[n], tname + " field " + n)
+    }
+    return TNamed(tname)
+}
+
+func structFieldOrder(c *Checker, tname string) [string] {
+    // field order for positional literals: source order is lost in the
+    // map, so v1 requires keyed literals when order matters — emit the
+    // names sorted for determinism
+    var out [string]
+    for fname, ft in c.structs[tname] {
+        _ = ft
+        out = append(out, fname)
+    }
+    return out
+}
+
+func checkMatch(c *Checker, subj Expr, arms [Arm]) Type {
+    st := checkExpr(c, subj)
+    var result Type
+    for a in arms {
+        child(c)
+        bindArm(c, a, st)
+        var at Type
+        if isENil(a.Expr) {
+            checkStmts(c, a.Stmts)
+            at = TVoid()
+        } else {
+            at = checkExpr(c, *a.Expr)
+        }
+        if result == nil2() {
+            result = at
+        } else if !tyEq(result, at) {
+            fail(c, "match arms produce different types: " + tyText(result) + " and " + tyText(at))
+        }
+        pop(c)
+    }
+    if result == nil2() {
+        return TVoid()
+    }
+    return result
+}
+
+func nil2() Type {
+    return TNamed("<<unset>>")
+}
+
+func bindArm(c *Checker, a Arm, st Type) {
+    if a.Pat == "_" || a.Pat == "true" || a.Pat == "false" {
+        return
+    }
+    // variant with payload: "Ok ( v )" — bind the names to the payload
+    if contains(a.Pat, " ") {
+        parts := split(a.Pat, " ")
+        vname := parts[0]
+        if has(c.ctors[vname]) {
+            fts := c.ctorFields[vname]
+            bi := 0
+            for p in parts {
+                if p == vname || p == "(" || p == ")" {
+                    continue
+                }
+                if bi < len(fts) {
+                    c.cur.vars[p] = fts[bi]
+                    bi++
+                }
+            }
+            return
+        }
+    }
+    if has(c.ctors[a.Pat]) {
+        return // unit variant: no binding
+    }
+    if len(a.Pat) > 0 && isAlpha(a.Pat[0]) {
+        c.cur.vars[a.Pat] = st // bare binding matches the subject
+    }
+}
+
+func checkTry(c *Checker, a Expr) Type {
+    at := checkExpr(c, a)
+    match at {
+        TNamed(n) -> {
+            if n == "Result" {
+                // lite: the payload type isn't tracked (generics); yield a
+                // poisoned value rather than a fake one
+                fail(c, "? unwraps to an untracked payload type (gocheck v1)")
+                return TErr()
+            }
+            fail(c, "? needs a Result, got " + tyText(at))
+            return TErr()
+        }
+        _ -> {
+            fail(c, "? needs a Result, got " + tyText(at))
+            return TErr()
+        }
+    }
+}
+
+func selectorNamed(c *Checker, n string, sel string) Type {
+    if has(c.structs[n]) {
+        fields := c.structs[n]
+        if has(fields[sel]) {
+            return fields[sel]
+        }
+        fail(c, n + " has no field " + sel)
+        return TErr()
+    }
+    if (sel == "IsOk" || sel == "IsErr") && n == "Result" {
+        return TBool()
+    }
+    fail(c, n + " has no field " + sel)
+    return TErr()
+}
+
+func selectorErr(c *Checker, t Type, sel string) Type {
+    fail(c, tyText(t) + " has no field " + sel)
+    return TErr()
+}

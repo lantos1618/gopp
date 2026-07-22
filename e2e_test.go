@@ -509,3 +509,37 @@ func TestGoparseProgram(t *testing.T) {
 		t.Fatalf("goparse output:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestGocheckProgram runs the go++-written type checker (goparse
+// -check) on a clean fixture and an error fixture.
+func TestGocheckProgram(t *testing.T) {
+	root := loadGraph("programs/goparse")
+	checkGraph(root)
+	if graphHasErrors(root) {
+		t.Fatal("checkGraph failed")
+	}
+	out := t.TempDir()
+	emitGraph(root, out)
+	okFixture := "package main\n\ntype Point struct {\n    X int\n    Y int\n}\n\nfunc double(n int) int {\n    return n * 2\n}\n\nfunc dist2(p Point) int {\n    return p.X*p.X + p.Y*p.Y\n}\n\nfunc main() {\n    p := Point{X: 3, Y: 4}\n    println(dist2(p))\n    xs := [int]{1, 2, 3}\n    total := 0\n    for x in xs {\n        total += x\n    }\n    println(total)\n    if total > 5 {\n        println(\"big\")\n    }\n}\n"
+	errFixture := "package main\n\nfunc main() {\n    x := 1 + \"s\"\n    y := nosuch\n    println(x, y)\n}\n"
+	run := func(src string) string {
+		path := filepath.Join(out, "f.gopp")
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("go", "run", ".", "-check", path)
+		cmd.Dir = out
+		got, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("gocheck failed: %v\n%s", err, got)
+		}
+		return string(got)
+	}
+	if got := run(okFixture); got != "ok\n" {
+		t.Fatalf("clean fixture: got %q, want %q", got, "ok\n")
+	}
+	want := "invalid operation: int + string (mismatched types)\nundefined: nosuch\n"
+	if got := run(errFixture); got != want {
+		t.Fatalf("error fixture:\n got %q\nwant %q", got, want)
+	}
+}

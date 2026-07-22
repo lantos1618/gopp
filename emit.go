@@ -740,6 +740,11 @@ func (e *emitter) expr(x Expr) string {
 		}
 		return ex.Op + e.expr(ex.X)
 	case *CallExpr:
+		if e.c.hasIdx[ex] {
+			// has(m[k]) -> comma-ok presence check
+			ix := ex.Args[0].(*IndexExpr)
+			return "func() bool { _, __gopp_ok := " + e.expr(ix.X) + "[" + e.expr(ix.Index[0]) + "]; return __gopp_ok }()"
+		}
 		return e.call(ex)
 	case *ComptimeExpr:
 		// sema evaluated it (§10); emit the constant, wrapped in its
