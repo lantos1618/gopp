@@ -1,0 +1,14 @@
+package main
+
+// string interpolation: sema error paths.
+
+enum Status {
+    Active
+}
+
+func main() {
+    s := Active
+    println("{s}") //~ ERROR cannot interpolate Status (need a basic type)
+    n := 1
+    println("ok {n}")
+}

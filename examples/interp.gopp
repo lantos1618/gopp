@@ -1,0 +1,27 @@
+package main
+
+// string interpolation: {expr} inside strings, {{ and }} for literals.
+
+func main() {
+    name := "gopher"
+    n := 42
+    println("hi {name}!")
+    println("n = {n}, n+1 = {n + 1}")
+    println("float: {3.5}, bool: {n > 0}")
+    println("literal braces: {{}}")
+    xs := []int{1, 2}
+    println("len: {len(xs)}, first: {xs[0]}")
+    p := Point{X: 3}
+    println("field: {p.X}")
+    println("call: {double(21)}")
+    d := 100 * ms
+    println("duration: {d}")
+}
+
+type Point struct {
+    X int
+}
+
+func double(n int) int {
+    return n * 2
+}

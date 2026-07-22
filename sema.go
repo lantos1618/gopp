@@ -1890,6 +1890,20 @@ func (c *checker) checkExpr(e Expr) Type {
 		ty = defaultType(c.checkMatchWant(ex, nil))
 	case *StructLitExpr:
 		ty = c.checkStructLit(ex)
+	case *StringInterpExpr:
+		// each part must be printable: basic types only (§7)
+		for _, pt := range ex.Parts {
+			et := c.checkExpr(pt)
+			if isErr(et) {
+				continue
+			}
+			switch et.(type) {
+			case tBasic, tUntypedInt, tUntypedFloat:
+			default:
+				c.diag.errorfAt(lineOf(pt), colOf(pt), "cannot interpolate %s (need a basic type)", et)
+			}
+		}
+		ty = tstring
 	case *SliceLitExpr:
 		et := c.resolveType(ex.Elem)
 		if isErr(et) {

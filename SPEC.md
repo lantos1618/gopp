@@ -184,6 +184,15 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   real stdout and `%v` formatting (Go's builtin writes to stderr and
   prints floats as exponents).
 
+## String interpolation
+
+- `"hi {name}!"` — `{expr}` inside a string interpolates any basic type
+  (numbers, strings, bools, durations); `{{` and `}}` are literal
+  braces. Expressions may nest braces (`{Point{X: 1}.X}` works).
+  Interpolating an enum/struct/other non-basic type is a sema error.
+- Emission is `gopp.Str(parts...)` — exact concatenation, no added
+  spacing. Interpolation is not a constant expression at comptime.
+
 ## Slice literals
 
 - `[]int{1, 2, 3}`, `[]int{}` — element values are checked against the

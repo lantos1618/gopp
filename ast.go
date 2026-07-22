@@ -355,6 +355,15 @@ type TryExpr struct {
 	Col  int
 }
 
+// StringInterpExpr is a string literal with {expr} interpolations:
+// "hi {name}!" — {{ and }} are literal braces. Parts alternate
+// BasicLit(kString) literal fragments and expression parts.
+type StringInterpExpr struct {
+	Parts []Expr
+	Line  int
+	Col   int
+}
+
 // ComptimeExpr is `comptime expr`: the expression must be constant —
 // literals, the prelude duration constants, arithmetic/comparison/logic,
 // conversions — and is evaluated at compile time (§10) with fuel and
@@ -375,19 +384,20 @@ type MatchExpr struct {
 	Col     int
 }
 
-func (*Ident) exprNode()         {}
-func (*BasicLit) exprNode()      {}
-func (*BinaryExpr) exprNode()    {}
-func (*UnaryExpr) exprNode()     {}
-func (*CallExpr) exprNode()      {}
-func (*SelectorExpr) exprNode()  {}
-func (*IndexExpr) exprNode()     {}
-func (*MakeChanExpr) exprNode()  {}
-func (*MatchExpr) exprNode()     {}
-func (*StructLitExpr) exprNode() {}
-func (*SliceLitExpr) exprNode()  {}
-func (*TryExpr) exprNode()       {}
-func (*ComptimeExpr) exprNode()  {}
+func (*Ident) exprNode()            {}
+func (*BasicLit) exprNode()         {}
+func (*BinaryExpr) exprNode()       {}
+func (*UnaryExpr) exprNode()        {}
+func (*CallExpr) exprNode()         {}
+func (*SelectorExpr) exprNode()     {}
+func (*IndexExpr) exprNode()        {}
+func (*MakeChanExpr) exprNode()     {}
+func (*MatchExpr) exprNode()        {}
+func (*StructLitExpr) exprNode()    {}
+func (*StringInterpExpr) exprNode() {}
+func (*SliceLitExpr) exprNode()     {}
+func (*TryExpr) exprNode()          {}
+func (*ComptimeExpr) exprNode()     {}
 
 // ---------- match patterns ----------
 

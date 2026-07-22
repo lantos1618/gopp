@@ -630,6 +630,89 @@ func (p *parser) parseIf() Stmt {
 	return &IfStmt{Cond: cond, Then: then, Else: els, Line: tk.line, Col: tk.col}
 }
 
+// maybeInterp splits a string token containing {expr} interpolations
+// into a StringInterpExpr; ok=false means plain string (no braces).
+func (p *parser) maybeInterp(tk token) (Expr, bool) {
+	inner := tk.text[1 : len(tk.text)-1]
+	if !strings.ContainsAny(inner, "{}") {
+		return nil, false
+	}
+	var parts []Expr
+	lit := func(s string) {
+		if s != "" {
+			parts = append(parts, &BasicLit{Kind: kString, Value: "\"" + s + "\"", Line: tk.line, Col: tk.col})
+		}
+	}
+	var cur strings.Builder
+	for i := 0; i < len(inner); {
+		c := inner[i]
+		switch {
+		case c == '\\' && i+1 < len(inner):
+			cur.WriteByte(c)
+			cur.WriteByte(inner[i+1])
+			i += 2
+		case c == '{' && i+1 < len(inner) && inner[i+1] == '{':
+			cur.WriteByte('{')
+			i += 2
+		case c == '{':
+			// find the matching }, tracking nesting and inner strings
+			depth, j := 1, i+1
+			for ; j < len(inner) && depth > 0; j++ {
+				switch inner[j] {
+				case '{':
+					depth++
+				case '}':
+					depth--
+				case '"':
+					for j++; j < len(inner) && inner[j] != '"'; j++ {
+						if inner[j] == '\\' {
+							j++
+						}
+					}
+				}
+			}
+			if depth != 0 {
+				p.errorft(tk, "unclosed { in string interpolation")
+			}
+			frag := inner[i+1 : j-1]
+			if strings.TrimSpace(frag) == "" {
+				p.errorft(tk, "empty interpolation {}")
+			}
+			lit(cur.String())
+			cur.Reset()
+			parts = append(parts, p.parseInterpFrag(frag, tk))
+			i = j
+		case c == '}' && i+1 < len(inner) && inner[i+1] == '}':
+			cur.WriteByte('}')
+			i += 2
+		case c == '}':
+			p.errorft(tk, "unmatched } in string (write it as }})")
+		default:
+			cur.WriteByte(c)
+			i++
+		}
+	}
+	lit(cur.String())
+	if len(parts) == 0 {
+		return nil, false
+	}
+	return &StringInterpExpr{Parts: parts, Line: tk.line, Col: tk.col}, true
+}
+
+// parseInterpFrag parses one {expr} interpolation fragment.
+func (p *parser) parseInterpFrag(frag string, tk token) Expr {
+	toks, err := lexAt(frag, tk.line-1)
+	if err != nil {
+		p.errorft(tk, "bad interpolation {%s}: %s", frag, err)
+	}
+	fp := &parser{toks: toks, diag: p.diag}
+	e := fp.parseExpr(1)
+	if fp.cur().kind != kEOF {
+		p.errorft(tk, "bad interpolation {%s}: trailing %q", frag, fp.cur().text)
+	}
+	return e
+}
+
 // parseForInExpr parses the ranged-over expression of a for-in loop,
 // keeping the body's { safe from struct-literal parsing.
 func (p *parser) parseForInExpr() Expr {
@@ -981,6 +1064,11 @@ func (p *parser) parsePrimary() Expr {
 	switch {
 	case tk.kind == kInt || tk.kind == kFloat || tk.kind == kString || tk.kind == kRune:
 		p.next()
+		if tk.kind == kString {
+			if e, ok := p.maybeInterp(tk); ok {
+				return e
+			}
+		}
 		return &BasicLit{Kind: tk.kind, Value: tk.text, Line: tk.line, Col: tk.col}
 	case tk.kind == kIdent:
 		switch tk.text {

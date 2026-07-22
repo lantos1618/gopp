@@ -713,6 +713,13 @@ func (e *emitter) expr(x Expr) string {
 			}
 		}
 		return e.typeExprGo(ex.Type) + "{" + strings.Join(parts, ", ") + "}"
+	case *StringInterpExpr:
+		parts := make([]string, len(ex.Parts))
+		for i, pt := range ex.Parts {
+			parts[i] = e.expr(pt)
+		}
+		e.needGopp = true
+		return "gopp.Str(" + strings.Join(parts, ", ") + ")"
 	case *SliceLitExpr:
 		parts := make([]string, len(ex.Values))
 		for i, v := range ex.Values {

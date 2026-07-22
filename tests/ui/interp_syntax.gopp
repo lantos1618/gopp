@@ -1,0 +1,9 @@
+package main
+
+// string interpolation: syntax error paths.
+
+func main() {
+    println("{}") //~ ERROR empty interpolation {}
+    println("{ ") //~ ERROR unclosed { in string interpolation
+    println("}") //~ ERROR unmatched } in string (write it as }})
+}

@@ -10,6 +10,7 @@ const prelude = `package gopp
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,16 @@ func GoppAfter(d time.Duration) <-chan time.Time { return time.After(d) }
 // writes to stderr and prints floats as exponents).
 func Println(a ...any) { fmt.Println(a...) }
 func Print(a ...any)   { fmt.Print(a...) }
+
+// Str concatenates string-interpolation parts ("hi {name}!") with no
+// added spacing.
+func Str(parts ...any) string {
+	var b strings.Builder
+	for _, p := range parts {
+		fmt.Fprint(&b, p)
+	}
+	return b.String()
+}
 
 // Result[T, E] — the go++ replacement for (T, error) returns.
 

@@ -291,3 +291,11 @@ func TestEndToEndForIn(t *testing.T) {
 		t.Fatalf("forin.gopp output:\n got %q\nwant %q", got, want)
 	}
 }
+
+func TestEndToEndInterp(t *testing.T) {
+	got := compileAndRun(t, "examples/interp.gopp")
+	want := "hi gopher!\nn = 42, n+1 = 43\nfloat: 3.5, bool: true\nliteral braces: {}\nlen: 2, first: 1\nfield: 3\ncall: 42\nduration: 100ms\n"
+	if got != want {
+		t.Fatalf("interp.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
