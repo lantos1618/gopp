@@ -251,22 +251,283 @@ func IsAbs(path string) bool     { return filepath.IsAbs(path) }
 
 const jsonGopp = `package json
 
-// JSON scalar emission. Struct marshalers are GENERATED per type via
-// comptime metaprogramming (see examples/jsondemo) — go++ has no any
-// and needs none.
+// JSON: scalar emission (native) plus a full recursive-descent parser
+// written in pure go++ (self-hosted decoding). Decoders per struct are
+// GENERATED via comptime metaprogramming (see examples/jsondemo).
 
 func Quote(s string) string = native
-func Bool(b bool) string = native
+func BoolStr(b bool) string = native
 func Float(f float64) string = native
+func ParseF(s string) Result[float64, string] = native
+
+enum Value {
+    Null
+    Bool(b bool)
+    Num(f float64)
+    Str(s string)
+    Arr(v [Value])
+    Obj(m map<string, Value>)
+}
+
+type parser struct {
+    src string
+    pos int
+}
+
+func Parse(s string) Result[Value, string] {
+    p := parser{src: s, pos: 0}
+    v := parseValue(&p)?
+    skipWs(&p)
+    if p.pos < len(s) {
+        return Err[Value, string]("trailing data at offset {p.pos}")
+    }
+    return Ok[Value, string](v)
+}
+
+func skipWs(p *parser) {
+    for p.pos < len(p.src) {
+        c := p.src[p.pos]
+        if c != byte(' ') && c != byte('\t') && c != byte('\n') && c != byte('\r') {
+            return
+        }
+        p.pos++
+    }
+}
+
+func parseValue(p *parser) Result[Value, string] {
+    skipWs(p)
+    if p.pos >= len(p.src) {
+        return Err[Value, string]("unexpected end of input")
+    }
+    c := p.src[p.pos]
+    if c == byte('{') { return parseObject(p) }
+    if c == byte('[') { return parseArray(p) }
+    if c == byte('"') {
+        s := parseString(p)?
+        return Ok[Value, string](Str(s))
+    }
+    if c == byte('t') { return parseLit(p, "true", Bool(true)) }
+    if c == byte('f') { return parseLit(p, "false", Bool(false)) }
+    if c == byte('n') { return parseLit(p, "null", Null) }
+    return parseNumber(p)
+}
+
+func parseLit(p *parser, word string, v Value) Result[Value, string] {
+    if len(p.src)-p.pos < len(word) || p.src[p.pos:p.pos+len(word)] != word {
+        return Err[Value, string]("invalid literal")
+    }
+    p.pos = p.pos + len(word)
+    return Ok[Value, string](v)
+}
+
+func parseString(p *parser) Result[string, string] {
+    p.pos++
+    out := ""
+    for p.pos < len(p.src) {
+        c := p.src[p.pos]
+        if c == byte('"') {
+            p.pos++
+            return Ok[string, string](out)
+        }
+        if c == byte('\\') && p.pos+1 < len(p.src) {
+            n := p.src[p.pos+1]
+            if n == byte('n') {
+                out = out + "\n"
+            } else if n == byte('t') {
+                out = out + "\t"
+            } else if n == byte('r') {
+                out = out + "\r"
+            } else {
+                out = out + string(rune(n))
+            }
+            p.pos = p.pos + 2
+            continue
+        }
+        out = out + string(rune(c))
+        p.pos++
+    }
+    return Err[string, string]("unterminated string")
+}
+
+func isDigit(c byte) bool {
+    return c >= byte('0') && c <= byte('9')
+}
+
+func parseNumber(p *parser) Result[Value, string] {
+    start := p.pos
+    if p.pos < len(p.src) && p.src[p.pos] == byte('-') { p.pos++ }
+    for p.pos < len(p.src) && isDigit(p.src[p.pos]) { p.pos++ }
+    if p.pos < len(p.src) && p.src[p.pos] == byte('.') {
+        p.pos++
+        for p.pos < len(p.src) && isDigit(p.src[p.pos]) { p.pos++ }
+    }
+    if p.pos < len(p.src) && (p.src[p.pos] == byte('e') || p.src[p.pos] == byte('E')) {
+        p.pos++
+        if p.pos < len(p.src) && (p.src[p.pos] == byte('+') || p.src[p.pos] == byte('-')) { p.pos++ }
+        for p.pos < len(p.src) && isDigit(p.src[p.pos]) { p.pos++ }
+    }
+    if p.pos == start {
+        return Err[Value, string]("invalid value at offset {start}")
+    }
+    f := ParseF(p.src[start:p.pos])?
+    return Ok[Value, string](Num(f))
+}
+
+func parseObject(p *parser) Result[Value, string] {
+    p.pos++
+    var m map<string, Value>
+    skipWs(p)
+    if p.pos < len(p.src) && p.src[p.pos] == byte('}') {
+        p.pos++
+        return Ok[Value, string](Obj(m))
+    }
+    for {
+        skipWs(p)
+        if p.pos >= len(p.src) || p.src[p.pos] != byte('"') {
+            return Err[Value, string]("expected a string key")
+        }
+        k := parseString(p)?
+        skipWs(p)
+        if p.pos >= len(p.src) || p.src[p.pos] != byte(':') {
+            return Err[Value, string]("expected ':'")
+        }
+        p.pos++
+        v := parseValue(p)?
+        m[k] = v
+        skipWs(p)
+        if p.pos < len(p.src) && p.src[p.pos] == byte(',') {
+            p.pos++
+            continue
+        }
+        if p.pos < len(p.src) && p.src[p.pos] == byte('}') {
+            p.pos++
+            return Ok[Value, string](Obj(m))
+        }
+        return Err[Value, string]("expected ',' or '}}'")
+    }
+}
+
+func parseArray(p *parser) Result[Value, string] {
+    p.pos++
+    var out [Value]
+    skipWs(p)
+    if p.pos < len(p.src) && p.src[p.pos] == byte(']') {
+        p.pos++
+        return Ok[Value, string](Arr(out))
+    }
+    for {
+        v := parseValue(p)?
+        out = append(out, v)
+        skipWs(p)
+        if p.pos < len(p.src) && p.src[p.pos] == byte(',') {
+            p.pos++
+            continue
+        }
+        if p.pos < len(p.src) && p.src[p.pos] == byte(']') {
+            p.pos++
+            return Ok[Value, string](Arr(out))
+        }
+        return Err[Value, string]("expected ',' or ']'")
+    }
+}
+
+// field access helpers for generated decoders: missing or mistyped
+// fields yield zero values (Go's encoding/json behavior).
+func FieldStr(m map<string, Value>, k string) string {
+    return match m[k] {
+    Str(x) -> x
+    _ -> ""
+    }
+}
+
+func FieldInt(m map<string, Value>, k string) int {
+    return match m[k] {
+    Num(f) -> int(f)
+    _ -> 0
+    }
+}
+
+func FieldBool(m map<string, Value>, k string) bool {
+    return match m[k] {
+    Bool(b) -> b
+    _ -> false
+    }
+}
+
+func FieldFloat(m map<string, Value>, k string) float64 {
+    return match m[k] {
+    Num(f) -> f
+    _ -> 0.0
+    }
+}
+
+func FieldObj(m map<string, Value>, k string) map<string, Value> {
+    return match m[k] {
+    Obj(o) -> o
+    _ -> emptyObj()
+    }
+}
+
+func FieldArr(m map<string, Value>, k string) [Value] {
+    return match m[k] {
+    Arr(a) -> a
+    _ -> [Value]{}
+    }
+}
+
+func emptyObj() map<string, Value> {
+    var m map<string, Value>
+    return m
+}
+
+func ValueStr(v Value) string {
+    return match v {
+    Str(x) -> x
+    _ -> ""
+    }
+}
+
+func ValueInt(v Value) int {
+    return match v {
+    Num(f) -> int(f)
+    _ -> 0
+    }
+}
+
+func ValueBool(v Value) bool {
+    return match v {
+    Bool(b) -> b
+    _ -> false
+    }
+}
+
+func ValueObj(v Value) map<string, Value> {
+    return match v {
+    Obj(o) -> o
+    _ -> emptyObj()
+    }
+}
 `
 
 const jsonGo = `package json
 
-import "strconv"
+import (
+	"strconv"
+
+	"goppout/gopp"
+)
 
 func Quote(s string) string { return strconv.Quote(s) }
 
-func Bool(b bool) string {
+func ParseF(s string) gopp.Result[float64, string] {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return gopp.Err[float64, string](err.Error())
+	}
+	return gopp.Ok[float64, string](f)
+}
+
+func BoolStr(b bool) string {
 	if b {
 		return "true"
 	}

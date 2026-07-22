@@ -544,6 +544,12 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 				c.diag.errorf(fn.Line, "duplicate function %s", fn.Name)
 				continue
 			}
+			if _, clash := c.ctors[fn.Name]; clash {
+				// a func name that is also a variant constructor: calls
+				// would resolve to the func and break the constructor
+				c.diag.errorf(fn.Line, "%s collides with a variant constructor", fn.Name)
+				continue
+			}
 			if fn.Native && !c.allowNative {
 				c.diag.errorf(fn.Line, "= native is only allowed in the standard library")
 				continue
@@ -702,6 +708,20 @@ func substFunc(ft *tFunc, params []string, args []Type) *tFunc {
 		out.results = append(out.results, subst(r, params, args))
 	}
 	return out
+}
+
+// structOf unwraps a type to its struct, through at most one pointer
+// (field access auto-derefs, like Go).
+func structOf(ty Type) *tStruct {
+	switch t := ty.(type) {
+	case *tStruct:
+		return t
+	case *tStar:
+		if st, ok := t.x.(*tStruct); ok {
+			return st
+		}
+	}
+	return nil
 }
 
 // methodOf finds a method on ty (§8): impls for concrete local types,
@@ -2836,7 +2856,9 @@ func (c *checker) checkSelector(ex *SelectorExpr) Type {
 	if isErr(xt) {
 		return terr
 	}
-	if st, ok := xt.(*tStruct); ok {
+	// auto-deref: field access through a pointer, like Go (p.x for *T)
+	st := structOf(xt)
+	if st != nil {
 		f := structField(st.decl, ex.Sel)
 		if f == nil {
 			c.diag.errorfAt(ex.Line, ex.Col, "%s has no field %s", xt, ex.Sel)

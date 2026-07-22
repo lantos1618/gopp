@@ -180,6 +180,18 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - Generic instantiations keep square brackets: `Result[int, string]`,
   `Pair[int]`.
 
+## JSON (stdlib + comptime)
+
+- `json` carries a pure-go++ recursive-descent parser (`json.Parse(s)
+  Result[json.Value, string]` — the Value enum, written in go++ itself)
+  plus field helpers (FieldStr/FieldInt/...: missing or mistyped fields
+  yield zero values, like encoding/json).
+- Marshalling is comptime-generated per struct (examples/jsondemo):
+  scalars, nested structs, slices — no any, no reflection.
+- Unmarshalling is comptime-generated too: decodeX(m) +
+  UnmarshalX(s) Result[X, string] per struct, generated from the same
+  decl walk. v1: no \u escapes, no field tags, numbers are float64.
+
 ## Standard library & native FFI
 
 - `import "str"` / `import "conv"` name no directory on disk, so the
@@ -288,6 +300,9 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - Strings index as bytes: `s[i]` is a `byte` (Go semantics; bounds are
   the runtime's problem). Slicing works on strings and slices:
   `s[i:j]`, `s[i:]`, `s[:j]`, `s[:]` — bounds must be numeric.
+- Field access auto-derefs one pointer: `p.field` for `p` of type `*T`
+  (Go semantics). A func may not share a name with a variant
+  constructor (collision error).
 - `defer f(...)` runs at function exit, LIFO, Go semantics. The argument
   must be a call expression.
 

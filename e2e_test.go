@@ -385,7 +385,7 @@ func TestGoppFormatterProgram(t *testing.T) {
 
 func TestEndToEndJsonDemo(t *testing.T) {
 	got := compilePkgAndRun(t, "examples/jsondemo")
-	want := "{\"Name\": \"ada \\\"lovelace\\\"\", \"Age\": 36, \"Admin\": true}\n{\"X\": 3, \"Y\": -4}\n{\"Name\": \"core\", \"Lead\": {\"Name\": \"ada \\\"lovelace\\\"\", \"Age\": 36, \"Admin\": true}, \"Scores\": [7, 8], \"Members\": [\"ada\", \"grace\"]}\n{\"Name\": \"\", \"Lead\": {\"Name\": \"\", \"Age\": 0, \"Admin\": false}, \"Scores\": [], \"Members\": []}\n"
+	want := "{\"Name\": \"ada \\\"lovelace\\\"\", \"Age\": 36, \"Admin\": true}\n{\"X\": 3, \"Y\": -4}\n{\"Name\": \"core\", \"Lead\": {\"Name\": \"ada \\\"lovelace\\\"\", \"Age\": 36, \"Admin\": true}, \"Scores\": [7, 8], \"Members\": [\"ada\", \"grace\"]}\n{\"Name\": \"\", \"Lead\": {\"Name\": \"\", \"Age\": 0, \"Admin\": false}, \"Scores\": [], \"Members\": []}\nada 36 true\ncore ada 8 ada\nerr: expected a string key\n"
 	if got != want {
 		t.Fatalf("jsondemo output:\n got %q\nwant %q", got, want)
 	}

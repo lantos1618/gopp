@@ -31,7 +31,7 @@ type Team struct {
 func emitField(t string, access string) string {
     if t == "string" { return "json.Quote(" + access + ")" }
     if t == "int" { return "conv.Itoa(" + access + ")" }
-    if t == "bool" { return "json.Bool(" + access + ")" }
+    if t == "bool" { return "json.BoolStr(" + access + ")" }
     if t == "float64" { return "json.Float(" + access + ")" }
     // anything else is a struct: call its generated marshaler
     return "Marshal" + t + "(" + access + ")"
@@ -87,6 +87,67 @@ comptime {
     }
 }
 
+// decodeField/decodeElem map a field's type to its extraction
+// expression — comptime functions called at compile time.
+func decodeField(t string, name string) string {
+    if t == "string" { return "json.FieldStr(m, \"" + name + "\")" }
+    if t == "int" { return "json.FieldInt(m, \"" + name + "\")" }
+    if t == "bool" { return "json.FieldBool(m, \"" + name + "\")" }
+    if t == "float64" { return "json.FieldFloat(m, \"" + name + "\")" }
+    return "decode" + t + "(json.FieldObj(m, \"" + name + "\"))"
+}
+
+func decodeElem(t string) string {
+    if t == "string" { return "json.ValueStr(e)" }
+    if t == "int" { return "json.ValueInt(e)" }
+    if t == "bool" { return "json.ValueBool(e)" }
+    return "decode" + t + "(json.ValueObj(e))"
+}
+
+func sliceDecode(parts string, name string, elemT string) string {
+    body := parts + " := [" + elemT + "]{{}}\n"
+    body = body + "for e in json.FieldArr(m, \"" + name + "\") {{\n"
+    body = body + "    " + parts + " = append(" + parts + ", " + decodeElem(elemT) + ")\n}}\n"
+    return body
+}
+
+comptime {
+    for d in decls() {
+        if d.kind == "struct" {
+            // decodeX(m): X from a parsed JSON object map
+            pre := ""
+            ret := "return " + d.name + "{{"
+            first := true
+            n := 0
+            for f in d.fields {
+                if !first { ret = ret + ", " }
+                first = false
+                if isSlice(f.type) {
+                    parts := "vals" + str(n)
+                    n++
+                    pre = pre + sliceDecode(parts, f.name, elemType(f.type))
+                    ret = ret + f.name + ": " + parts
+                } else {
+                    ret = ret + f.name + ": " + decodeField(f.type, f.name)
+                }
+            }
+            ret = ret + "}}"
+            fn := Func("decode" + d.name)
+            fn.params.add(Param("m", "map<string, json.Value>"))
+            fn.results.add(Param("", d))
+            fn.body = pre + ret
+            gen(fn)
+            // UnmarshalX(s): full parse -> Result
+            u := Func("Unmarshal" + d.name)
+            u.params.add(Param("s", "string"))
+            u.results.add(Param("", "Result[" + d.name + ", string]"))
+            u.body = "v := json.Parse(s)?\nreturn match v {{\nObj(m) -> Ok[" + d.name + ", string](decode" + d.name + "(m))\n_ -> Err[" + d.name + ", string](\"expected a JSON object\")\n}}"
+            gen(u)
+            print("generated decode" + d.name + " + Unmarshal" + d.name)
+        }
+    }
+}
+
 func main() {
     u := User{Name: "ada \"lovelace\"", Age: 36, Admin: true}
     println(MarshalUser(u))
@@ -96,4 +157,23 @@ func main() {
     println(MarshalTeam(t))
     var z Team
     println(MarshalTeam(z))
+
+    // round-trip: parse text back into structs
+    text := "{{\"Name\": \"ada\", \"Age\": 36, \"Admin\": true}}"
+    r := UnmarshalUser(text)
+    match r {
+        Ok(v) -> println(v.Name, v.Age, v.Admin)
+        Err(e) -> println("err:", e)
+    }
+    team := "{{\"Name\": \"core\", \"Lead\": {{\"Name\": \"ada\", \"Age\": 36, \"Admin\": true}}, \"Scores\": [7, 8], \"Members\": [\"ada\", \"grace\"]}}"
+    t2 := UnmarshalTeam(team)
+    match t2 {
+        Ok(v) -> println(v.Name, v.Lead.Name, v.Scores[1], v.Members[0])
+        Err(e) -> println("err:", e)
+    }
+    bad := UnmarshalUser("{{nope")
+    match bad {
+        Ok(v) -> println(v.Name)
+        Err(e) -> println("err:", e)
+    }
 }

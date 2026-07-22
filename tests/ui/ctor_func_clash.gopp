@@ -1,0 +1,14 @@
+package main
+
+// a func may not share a name with a variant constructor: calls would
+// resolve to the func and silently break the constructor.
+
+enum Status {
+    Active
+}
+
+func Active() int { //~ ERROR Active collides with a variant constructor
+    return 1
+}
+
+func main() {}
