@@ -3,11 +3,11 @@ package main
 // map literals + slices and for-in.
 
 func main() {
-    m := map[string]int{"a": 1, "b": 2}
+    m := map<string, int>{"a": 1, "b": 2}
     println(m["a"], m["b"])
-    e := map[string]int{}
+    e := map<string, int>{}
     println(len(e))
-    counts := map[string]int{"x": 10}
+    counts := map<string, int>{"x": 10}
     counts["x"] = counts["x"] + 5
     println(counts["x"])
     total := 0
@@ -15,6 +15,6 @@ func main() {
         total += v
     }
     println(total)
-    nested := map[string][]int{"primes": []int{2, 3, 5}}
+    nested := map<string, []int>{"primes": []int{2, 3, 5}}
     println(nested["primes"][2])
 }

@@ -119,7 +119,7 @@ func typeExprString(te TypeExpr) string {
 		}
 		return typeExprString(t.X) + "[" + strings.Join(parts, ", ") + "]"
 	case *MapType:
-		return "map[" + typeExprString(t.K) + "]" + typeExprString(t.V)
+		return "map<" + typeExprString(t.K) + ", " + typeExprString(t.V) + ">"
 	case *ChanType:
 		return "chan[" + typeExprString(t.Elem) + "]"
 	case *SliceType:

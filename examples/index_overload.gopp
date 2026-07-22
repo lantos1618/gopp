@@ -7,7 +7,7 @@ package main
 type Grid struct {
     W     int
     H     int
-    Cells map[int]int
+    Cells map<int, int>
 }
 
 behavior Indexable {
@@ -25,7 +25,7 @@ impl Indexable for Grid {
 }
 
 func NewGrid(w int, h int) Grid {
-    var c map[int]int
+    var c map<int, int>
     return Grid{W: w, H: h, Cells: c}
 }
 

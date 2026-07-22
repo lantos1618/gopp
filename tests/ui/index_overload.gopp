@@ -3,7 +3,7 @@ package main
 // indexing overloads: error paths.
 
 type Grid struct {
-    Cells map[int]int
+    Cells map<int, int>
 }
 
 behavior Indexable {

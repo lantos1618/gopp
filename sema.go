@@ -50,7 +50,7 @@ func (t *tStruct) String() string { return t.decl.Name }
 
 type tMap struct{ k, v Type }
 
-func (t *tMap) String() string { return "map[" + t.k.String() + "]" + t.v.String() }
+func (t *tMap) String() string { return "map<" + t.k.String() + ", " + t.v.String() + ">" }
 
 type tChan struct{ elem Type }
 

@@ -1,0 +1,23 @@
+package main
+
+// map<K, V> type syntax: params, vars, struct fields, nesting, generics.
+
+type Registry struct {
+    ByName map<string, int>
+    Nested map<string, map<int, bool>>
+}
+
+func lookup(m map<string, int>, key string) int {
+    return m[key]
+}
+
+func main() {
+    var scores map<string, int>
+    scores["alice"] = 90
+    r := Registry{ByName: map<string, int>{"b": 2}}
+    println(lookup(scores, "alice"), r.ByName["b"])
+    var res map<string, Result[int, string]>
+    println(len(res))
+    lit := map<int, map<int, bool>>{1: map<int, bool>{2: true}}
+    println(lit[1][2])
+}

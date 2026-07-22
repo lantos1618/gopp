@@ -8,7 +8,7 @@ language level:
   generics; `match` must cover every variant or it doesn't compile.
 - **`Result[T, E]` instead of `error` returns.** `error` is not a type in
   go++. Failures are values, propagated with `?`, handled with `match`.
-- **No nil maps.** `var m map[K]V` emits `make(...)` — a declared map is
+- **No nil maps.** `var m map<K, V>` emits `make(...)` — a declared map is
   always ready to write.
 - **No implicit conversions.** `int8 + int64` is a compile error;
   conversions are explicit (`int64(x)`). Numeric literals are untyped
@@ -87,7 +87,7 @@ got := match {
     after(1 * second) -> -1
 }
 
-var scores map[string]int
+var scores map<string, int>
 scores["alice"] = 90 // no nil-map panic
 ```
 

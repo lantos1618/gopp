@@ -1,0 +1,11 @@
+package main
+
+// Go's map[K]V is gone: the parser points at the new map<K, V> form.
+
+func main() {
+    var m map[string]int //~ ERROR map types are written map<K, V> (e.g. map<string, int>)
+    println(m)
+    lit := map[string]int{"a": 1} //~ ERROR map types are written map<K, V> (e.g. map<string, int>)
+    // recovery swallows the literal's } as the block end (cf. slice_lit_syntax)
+    println(lit) //~ ERROR expected declaration
+}

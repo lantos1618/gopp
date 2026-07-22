@@ -82,6 +82,18 @@ func (p *parser) expect(text string) {
 	p.next()
 }
 
+// expectGT consumes the `>` closing a map<K, V> type. The lexer glues two
+// nested closers into one `>>` operator token (ops2 in lex.go), so a type
+// like map<int, map<int, bool>> ends in a single token: split it in place,
+// leaving a ">" for the enclosing parseType to consume.
+func (p *parser) expectGT() {
+	if p.cur().text == ">>" {
+		p.toks[p.pos].text = ">"
+		return
+	}
+	p.expect(">")
+}
+
 func (p *parser) expectIdent() string {
 	if p.cur().kind != kIdent {
 		p.errorft(p.cur(), "expected identifier, got %q", p.cur().text)
@@ -465,10 +477,15 @@ func (p *parser) parseType() TypeExpr {
 	switch tk.text {
 	case "map":
 		p.next()
-		p.expect("[")
+		if p.cur().text == "[" {
+			p.errorft(p.cur(), "map types are written map<K, V> (e.g. map<string, int>)")
+		}
+		p.expect("<")
 		k := p.parseType()
-		p.expect("]")
-		return &MapType{K: k, V: p.parseType(), Line: line, Col: col}
+		p.expect(",")
+		v := p.parseType()
+		p.expectGT()
+		return &MapType{K: k, V: v, Line: line, Col: col}
 	case "chan":
 		p.next()
 		p.expect("[")
@@ -1078,15 +1095,19 @@ func (p *parser) parsePrimary() Expr {
 			p.next()
 			return &ComptimeExpr{X: p.parseExpr(1), Line: tk.line, Col: tk.col}
 		case "map":
-			// map literal: map[string]int{"a": 1} (composite, keyed)
+			// map literal: map<string, int>{"a": 1} (composite, keyed)
 			line := p.next().line
 			col := tk.col
-			p.expect("[")
+			if p.cur().text == "[" {
+				p.errorft(p.cur(), "map types are written map<K, V> (e.g. map<string, int>)")
+			}
+			p.expect("<")
 			k := p.parseType()
-			p.expect("]")
+			p.expect(",")
 			v := p.parseType()
+			p.expectGT()
 			if p.cur().text != "{" {
-				p.errorf(line, "map literal map[K]V needs {entries}")
+				p.errorf(line, "map literal map<K, V> needs {entries}")
 			}
 			p.next()
 			var entries []MapEntry

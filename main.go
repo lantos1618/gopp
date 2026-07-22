@@ -26,7 +26,7 @@ import (
 //     channel arms (recv/send/after/_) or boolean arms
 //   - chan[T](cap) construction and .send/.recv/.close methods
 //   - loop { } with break loop
-//   - maps instantiated on declaration: var m map[K]V lowers to make(...)
+//   - maps instantiated on declaration: var m map<K, V> lowers to make(...)
 //   - Result[T,E] / Option[T] from the emitted prelude, with ? try
 //   - comptime expr: constants folded at go++ compile time (§10)
 //   - comptime metaprogramming: top-level comptime blocks walk and

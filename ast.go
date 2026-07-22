@@ -487,7 +487,7 @@ func (*AfterPat) patNode()    {}
 func (*ClosedPat) patNode()   {}
 func (*BoolPat) patNode()     {}
 
-// MapLitExpr is a map literal: map[string]int{"a": 1}. Empty literal is
+// MapLitExpr is a map literal: map<string, int>{"a": 1}. Empty literal is
 // allowed (maps are never nil in go++ either way).
 type MapLitExpr struct {
 	K, V    TypeExpr

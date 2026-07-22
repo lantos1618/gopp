@@ -17,7 +17,7 @@ func main() {
     }
 
     // map: value, then key + value
-    var m map[string]int
+    var m map<string, int>
     m["a"] = 1
     m["b"] = 2
     sum := 0

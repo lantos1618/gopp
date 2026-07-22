@@ -83,7 +83,7 @@ func main() {
     }
 
     // maps are instantiated when declared — no nil-map panic
-    var scores map[string]int
+    var scores map<string, int>
     scores["alice"] = 90
     println(scores["alice"])
 }

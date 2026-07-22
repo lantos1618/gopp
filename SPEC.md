@@ -186,9 +186,9 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 
 ## Map literals
 
-- `map[string]int{"a": 1}`, `map[string]int{}` — keys and values are
+- `map<string, int>{"a": 1}`, `map<string, int>{}` — keys and values are
   checked against the declared types. (Declaration without literal —
-  `var m map[K]V` — still auto-instantiates; nil maps do not exist.)
+  `var m map<K, V>` — still auto-instantiates; nil maps do not exist.)
 
 ## String interpolation
 
@@ -281,7 +281,7 @@ or don't resolve, so the programs cannot be written:
   channels are used through `ch.recv()`, `ch.send(v)`, `ch.close()` (and
   `select`, which keeps its own syntax). One obvious way, no operator
   precedence puzzles.
-- **No nil maps.** `var m map[K]V` emits `make(...)` — declared maps are
+- **No nil maps.** `var m map<K, V>` emits `make(...)` — declared maps are
   always ready to write (the silent-crash footgun that motivated go++).
 - **No implicit conversions.** `int32` and `int64` do not mix silently;
   conversions are explicit function-style calls (Phase B).
@@ -291,7 +291,7 @@ but null pointer constants do not — there is no way to write one.
 
 ## Evaluation & runtime semantics
 
-- Maps are instantiated on declaration: `var m map[K]V` emits `make(...)`.
+- Maps are instantiated on declaration: `var m map<K, V>` emits `make(...)`.
   There are no nil maps in go++ (the silent-crash footgun that motivated
   the language).
 - Overflow, division by zero, evaluation order: exactly Go's semantics —
