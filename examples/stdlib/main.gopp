@@ -7,6 +7,8 @@ import "conv"
 import "math"
 import "os"
 import "time"
+import "sort"
+import "rand"
 
 func shout(s string) string {
     return str.ToUpper(s) + "!"
@@ -57,5 +59,18 @@ func more() {
     time.Sleep(1 * ms)
     println("slept")
     println(time.Unix() > 1000000)
+    var xs []int
+    xs = append(xs, 5)
+    xs = append(xs, 2)
+    xs = append(xs, 8)
+    xs = append(xs, 1)
+    sort.Ints(xs)
+    println(xs[0], xs[3])
+    sort.IntsDesc(xs)
+    println(xs[0], xs[3])
+    n := rand.Intn(10)
+    println(n >= 0 && n < 10)
+    println(rand.Float64() >= 0.0)
 }
+
 

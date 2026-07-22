@@ -20,6 +20,8 @@ var stdlibPackages = map[string]stdlibPkg{
 	"math": {mathGopp, mathGo},
 	"os":   {osGopp, osGo},
 	"time": {timeGopp, timeGo},
+	"sort": {sortGopp, sortGo},
+	"rand": {randGopp, randGo},
 }
 
 const strGopp = `package str
@@ -168,4 +170,42 @@ import "time"
 func Sleep(d time.Duration) { time.Sleep(d) }
 func Unix() int             { return int(time.Now().Unix()) }
 func UnixMillis() int       { return int(time.Now().UnixMilli()) }
+`
+
+const sortGopp = `package sort
+
+// Sorting slices in place.
+
+func Ints(xs []int) = native
+func Floats(xs []float64) = native
+func Strings(xs []string) = native
+func IntsDesc(xs []int) = native
+`
+
+const sortGo = `package sort
+
+import "sort"
+
+func Ints(xs []int)        { sort.Ints(xs) }
+func Floats(xs []float64)  { sort.Float64s(xs) }
+func Strings(xs []string)  { sort.Strings(xs) }
+func IntsDesc(xs []int)    { sort.Sort(sort.Reverse(sort.IntSlice(xs))) }
+`
+
+const randGopp = `package rand
+
+// Pseudo-random numbers (Go's math/rand/v2).
+
+func Intn(n int) int = native
+func Float64() float64 = native
+func Shuffle(xs []int) = native
+`
+
+const randGo = `package rand
+
+import "math/rand/v2"
+
+func Intn(n int) int     { return rand.IntN(n) }
+func Float64() float64   { return rand.Float64() }
+func Shuffle(xs []int)   { rand.Shuffle(len(xs), func(i, j int) { xs[i], xs[j] = xs[j], xs[i] }) }
 `

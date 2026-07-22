@@ -156,7 +156,7 @@ func TestEndToEndOperators(t *testing.T) {
 
 func TestEndToEndStdlib(t *testing.T) {
 	got := compilePkgAndRun(t, "examples/stdlib")
-	want := "GO++!\na-b-c\ntrue\ntrue\nbbb\n42!\n124\nerr\n4\n3\n2.5\n2.5\ntrue\nwrote true\nhi from go++\nread err\nslept\ntrue\n"
+	want := "GO++!\na-b-c\ntrue\ntrue\nbbb\n42!\n124\nerr\n4\n3\n2.5\n2.5\ntrue\nwrote true\nhi from go++\nread err\nslept\ntrue\n1 8\n8 1\ntrue\ntrue\n"
 	if got != want {
 		t.Fatalf("stdlib output:\n got %q\nwant %q", got, want)
 	}
