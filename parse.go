@@ -434,6 +434,19 @@ func (p *parser) parseEnumDecl() Decl {
 func (p *parser) parseStructDecl() Decl {
 	line := p.next().line // type
 	name := p.expectIdent()
+	var typeParams []string
+	if p.cur().text == "[" { // type Pair[T] struct (§8)
+		p.next()
+		for {
+			typeParams = append(typeParams, p.expectIdent())
+			if p.cur().text == "," {
+				p.next()
+				continue
+			}
+			break
+		}
+		p.expect("]")
+	}
 	if p.cur().text != "struct" {
 		p.errorft(p.cur(), "only struct types are supported, got %q", p.cur().text)
 	}
@@ -465,7 +478,7 @@ func (p *parser) parseStructDecl() Decl {
 			p.next()
 		}
 	}
-	return &StructDecl{Name: name, Fields: fields, Line: line}
+	return &StructDecl{Name: name, TypeParams: typeParams, Fields: fields, Line: line}
 }
 
 // ---------- types ----------
@@ -1020,15 +1033,12 @@ func (p *parser) parsePostfix() Expr {
 }
 
 // parseStructLit parses `{ Name: v, ... }` / `{ v, ... }` after a type
-// name in expression position.
+// name in expression position — plain (Point) or generic (Pair[int]).
 func (p *parser) parseStructLit(x Expr) Expr {
 	line := p.cur().line
 	col := p.cur().col
-	var te TypeExpr
-	switch t := x.(type) {
-	case *Ident:
-		te = &IdentType{Name: t.Name, Line: t.Line, Col: t.Col}
-	default:
+	te := exprToType(x)
+	if te == nil {
 		p.errorf(line, "expected a struct type name before {")
 	}
 	p.next() // {

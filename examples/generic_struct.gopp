@@ -1,0 +1,29 @@
+package main
+
+// §8: generic structs — type params on struct declarations.
+
+type Pair[T] struct {
+    First  T
+    Second T
+}
+
+type Wrap[T] struct {
+    Val T
+}
+
+func Swap[T](p Pair[T]) Pair[T] {
+    return Pair[T]{First: p.Second, Second: p.First}
+}
+
+func main() {
+    p := Pair[int]{First: 1, Second: 2}
+    println(p.First, p.Second)
+    s := Swap(p)
+    println(s.First, s.Second)
+    w := Wrap[string]{Val: "go++"}
+    println(w.Val)
+    var z Pair[int]
+    println(z.First, z.Second)
+    n := Pair[Pair[int]]{First: p, Second: s}
+    println(n.Second.First, n.Second.Second)
+}

@@ -44,9 +44,21 @@ func (t *tEnum) String() string {
 	return t.decl.Name + "[" + strings.Join(parts, ", ") + "]"
 }
 
-type tStruct struct{ decl *StructDecl } // nominal: identity is the decl
+type tStruct struct {
+	decl *StructDecl
+	args []Type // §8: instantiation arguments for generic structs
+}
 
-func (t *tStruct) String() string { return t.decl.Name }
+func (t *tStruct) String() string {
+	if len(t.args) == 0 {
+		return t.decl.Name
+	}
+	parts := make([]string, len(t.args))
+	for i, a := range t.args {
+		parts[i] = a.String()
+	}
+	return t.decl.Name + "[" + strings.Join(parts, ", ") + "]"
+}
 
 type tMap struct{ k, v Type }
 
@@ -174,7 +186,15 @@ func sameType(a, b Type) bool {
 		return true
 	case *tStruct:
 		bt, ok := b.(*tStruct)
-		return ok && at.decl == bt.decl
+		if !ok || at.decl != bt.decl || len(at.args) != len(bt.args) {
+			return false
+		}
+		for i := range at.args {
+			if !sameType(at.args[i], bt.args[i]) {
+				return false
+			}
+		}
+		return true
 	case *tMap:
 		bt, ok := b.(*tMap)
 		return ok && sameType(at.k, bt.k) && sameType(at.v, bt.v)
@@ -222,6 +242,12 @@ func subst(ty Type, params []string, args []Type) Type {
 			na[i] = subst(a, params, args)
 		}
 		return &tEnum{decl: t.decl, args: na}
+	case *tStruct:
+		na := make([]Type, len(t.args))
+		for i, a := range t.args {
+			na[i] = subst(a, params, args)
+		}
+		return &tStruct{decl: t.decl, args: na}
 	case *tMap:
 		return &tMap{subst(t.k, params, args), subst(t.v, params, args)}
 	case *tChan:
@@ -477,11 +503,14 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			}
 		}
 	}
-	// struct field types must resolve
+	// struct field types must resolve (with type params in scope, §8)
 	for _, s := range c.structs {
-		for _, fld := range s.Fields {
-			c.resolveType(fld.Type)
-		}
+		s := s
+		c.withTypeParams(s.TypeParams, func() {
+			for _, fld := range s.Fields {
+				c.resolveType(fld.Type)
+			}
+		})
 	}
 	// §4: infinite-size type cycle detection — a struct that contains
 	// itself without indirection (Ptr, slice, map, chan) cannot exist.
@@ -496,7 +525,10 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 	for _, n := range names {
 		s := c.structs[n]
 		if !c.cycleDone[s] {
-			c.checkStructCycles(s, s, map[*StructDecl]bool{})
+			s := s
+			c.withTypeParams(s.TypeParams, func() {
+				c.checkStructCycles(s, s, map[*StructDecl]bool{})
+			})
 		}
 	}
 	// §8: behaviors and impls — after types, before signatures (bounds
@@ -1125,6 +1157,10 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 			return &tEnum{decl: e}
 		}
 		if s, ok := c.structs[t.Name]; ok {
+			if len(s.TypeParams) > 0 {
+				c.diag.errorfAt(t.Line, t.Col, "struct %s is generic: use %s[%s]", t.Name, t.Name, strings.Join(s.TypeParams, ", "))
+				return terr
+			}
 			return &tStruct{decl: s}
 		}
 		c.diag.errorfAt(t.Line, t.Col, "undefined type %s", t.Name)
@@ -1144,7 +1180,15 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 		}
 		e, ok := c.enums[base.Name]
 		if !ok {
-			c.diag.errorfAt(t.Line, t.Col, "%s is not a generic enum", base.Name)
+			// generic struct instantiation: Pair[int] (§8)
+			if s, ok := c.structs[base.Name]; ok {
+				if len(s.TypeParams) != len(t.Args) { // arity (§5)
+					c.diag.errorfAt(t.Line, t.Col, "%s takes %d type argument(s), got %d", base.Name, len(s.TypeParams), len(t.Args))
+					return terr
+				}
+				return &tStruct{decl: s, args: args}
+			}
+			c.diag.errorfAt(t.Line, t.Col, "%s is not a generic type", base.Name)
 			return terr
 		}
 		if len(e.TypeParams) != len(t.Args) { // arity check (§5)
@@ -1186,11 +1230,11 @@ func (c *checker) resolveQualifiedType(pkg, name string, args []Type, line, col 
 		return &tEnum{decl: e, args: args}
 	}
 	if s, ok := dep.structs[name]; ok {
-		if len(args) > 0 {
-			c.diag.errorfAt(line, col, "%s.%s is not generic", pkg, name)
+		if len(s.TypeParams) != len(args) { // arity (§5), covers bare pkg.Generic too
+			c.diag.errorfAt(line, col, "%s.%s takes %d type argument(s), got %d", pkg, name, len(s.TypeParams), len(args))
 			return terr
 		}
-		return &tStruct{decl: s}
+		return &tStruct{decl: s, args: args}
 	}
 	c.diag.errorfAt(line, col, "undefined type %s.%s", pkg, name)
 	return terr
@@ -2519,6 +2563,12 @@ func (c *checker) matchTypePattern(pat, arg Type, params []string, solved []Type
 				c.matchTypePattern(p.args[i], a.args[i], params, solved, line, col)
 			}
 		}
+	case *tStruct:
+		if a, ok := arg.(*tStruct); ok && a.decl == p.decl && len(a.args) == len(p.args) {
+			for i := range p.args {
+				c.matchTypePattern(p.args[i], a.args[i], params, solved, line, col)
+			}
+		}
 	case *tMap:
 		if a, ok := arg.(*tMap); ok {
 			c.matchTypePattern(p.k, a.k, params, solved, line, col)
@@ -2618,7 +2668,7 @@ func (c *checker) checkStructLit(ex *StructLitExpr) Type {
 				c.checkExpr(fv.Value)
 				continue
 			}
-			c.checkAgainst(fv.Value, c.resolveFieldType(d, d.Fields[positional].Type))
+			c.checkAgainst(fv.Value, c.structFieldType(st, &d.Fields[positional]))
 			positional++
 			continue
 		}
@@ -2636,12 +2686,38 @@ func (c *checker) checkStructLit(ex *StructLitExpr) Type {
 			c.diag.errorfAt(fv.Line, fv.Col, "duplicate field %s in literal", fv.Name)
 		}
 		seen[fv.Name] = true
-		c.checkAgainst(fv.Value, c.resolveFieldType(d, f.Type))
+		c.checkAgainst(fv.Value, c.structFieldType(st, f))
 	}
 	if !mixed && positional > 0 && positional != len(d.Fields) {
 		c.diag.errorfAt(ex.Line, ex.Col, "too few values in %s literal: %d of %d fields", d.Name, positional, len(d.Fields))
 	}
 	return st
+}
+
+// withTypeParams runs f with params as the in-scope rigid type
+// parameters, restoring the previous scope afterwards. This is the ONE
+// place curTypeParams is swapped — no scattered save/set/restore.
+func (c *checker) withTypeParams(params []string, f func()) {
+	save := c.curTypeParams
+	defer func() { c.curTypeParams = save }()
+	c.curTypeParams = params
+	f()
+}
+
+// structFieldType resolves a struct field's type for an instantiation:
+// the owning package resolves the pattern (foreign fields may name
+// sibling types), then the struct's type arguments substitute in.
+func (c *checker) structFieldType(st *tStruct, f *Field) Type {
+	own := c
+	if q := c.declPkg[st.decl]; q != "" {
+		own = c.imports[q]
+	}
+	var ft Type
+	own.withTypeParams(st.decl.TypeParams, func() { ft = own.resolveType(f.Type) })
+	if len(st.args) == 0 {
+		return ft
+	}
+	return subst(ft, st.decl.TypeParams, st.args)
 }
 
 // resolveFieldType resolves a struct/enum field type using the checker
@@ -2670,7 +2746,7 @@ func (c *checker) checkSelector(ex *SelectorExpr) Type {
 			c.diag.errorfAt(ex.Line, ex.Col, "%s has no field %s", xt, ex.Sel)
 			return terr
 		}
-		return c.resolveFieldType(st.decl, f.Type)
+		return c.structFieldType(st, f)
 	}
 	if en, ok := xt.(*tEnum); ok && en.decl.Name == "Result" {
 		if ex.Sel == "IsOk" || ex.Sel == "IsErr" {

@@ -1,0 +1,19 @@
+package main
+
+// generic structs: error paths.
+
+type Pair[T] struct {
+    First  T
+    Second T
+}
+
+func main() {
+    var a Pair //~ ERROR struct Pair is generic: use Pair[T]
+    _ = a
+    b := Pair[int, string]{First: 1} //~ ERROR Pair takes 1 type argument(s), got 2
+    _ = b
+    c := Pair[int]{First: "x", Second: 2} //~ ERROR expected int, found string
+    _ = c
+    d := Pair[int]{1} //~ ERROR too few values in Pair literal: 1 of 2 fields
+    _ = d
+}

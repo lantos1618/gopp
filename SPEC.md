@@ -114,6 +114,16 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   live in the type's package — deliberately NOT relaxed, like Rust's
   orphan rule but stricter).
 
+## Generic structs (§8)
+
+- `type Pair[T] struct { First T; Second T }` — instantiations are
+  written `Pair[int]`; a bare generic name is an error ("struct Pair is
+  generic"). Field accesses and literals substitute the arguments
+  (`Pair[int]{First: 1}`, `p.First` is int), nested instantiations work
+  (`Pair[Pair[int]]`), and generic-function inference sees through them
+  (`Swap(p)` solves `T=int`).
+- Deferred: impls on generic structs (enums only for now).
+
 ## Behaviors (§8)
 
 - `behavior Stringer { String(self) string }` — a trait. The first

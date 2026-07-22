@@ -121,11 +121,19 @@ func (e *emitter) typeGo(t Type) string {
 		}
 		return name + "[" + strings.Join(parts, ", ") + "]"
 	case *tStruct:
+		name := tt.decl.Name
 		if q := e.c.declPkg[tt.decl]; q != "" { // imported struct (§3)
 			e.useImport(q)
-			return q + "." + tt.decl.Name
+			name = q + "." + name
 		}
-		return tt.decl.Name
+		if len(tt.args) == 0 {
+			return name
+		}
+		parts := make([]string, len(tt.args))
+		for i, a := range tt.args {
+			parts[i] = e.typeGo(a)
+		}
+		return name + "[" + strings.Join(parts, ", ") + "]"
 	case *tMap:
 		return "map[" + e.typeGo(tt.k) + "]" + e.typeGo(tt.v)
 	case *tChan:
@@ -184,7 +192,11 @@ func (e *emitter) typeExprGo(te TypeExpr) string {
 // ---------- structs ----------
 
 func (e *emitter) emitStruct(d *StructDecl) {
-	e.s("type %s struct {\n", d.Name)
+	tp := ""
+	if len(d.TypeParams) > 0 { // §8: type Pair[T any] struct
+		tp = "[" + strings.Join(d.TypeParams, " any, ") + " any]"
+	}
+	e.s("type %s%s struct {\n", d.Name, tp)
 	for _, f := range d.Fields {
 		e.s("%s %s\n", f.Name, e.typeExprGo(f.Type))
 	}

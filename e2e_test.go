@@ -342,3 +342,11 @@ func TestEndToEndEmbed(t *testing.T) {
 		t.Fatalf("embed output:\n got %q\nwant %q", got, want)
 	}
 }
+
+func TestEndToEndGenericStruct(t *testing.T) {
+	got := compileAndRun(t, "examples/generic_struct.gopp")
+	want := "1 2\n2 1\ngo++\n0 0\n2 1\n"
+	if got != want {
+		t.Fatalf("generic_struct.gopp output:\n got %q\nwant %q", got, want)
+	}
+}

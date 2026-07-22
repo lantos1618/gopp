@@ -86,10 +86,11 @@ type Variant struct {
 // StructDecl is `type Name struct { ... }`. Derives lists @derive names
 // attached above the declaration (e.g. ["Debug", "Clone"]).
 type StructDecl struct {
-	Name    string
-	Fields  []Field
-	Derives []string
-	Line    int
+	Name       string
+	TypeParams []string // e.g. ["T"]; empty = non-generic (§8)
+	Fields     []Field
+	Derives    []string
+	Line       int
 }
 
 func (*FuncDecl) declNode()     {}

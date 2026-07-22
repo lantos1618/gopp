@@ -67,6 +67,8 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
 
 ## Next up, in dependency order
 
+- ~~generic structs~~ ✅ · ~~chan<T> syntax~~ ✅ · ~~[T] slice syntax~~ (next)
+
 1. ~~Parser recovery~~ ✅ · ~~Structs~~ ✅ · ~~`?` try~~ ✅ ·
    ~~better types~~ ✅ · ~~`comptime` expr (§10)~~ ✅ ·
    ~~diagnostics polish (§11)~~ ✅ · ~~imports / modules (§3)~~ ✅ ·
