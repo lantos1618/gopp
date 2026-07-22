@@ -389,6 +389,10 @@ but null pointer constants do not — there is no way to write one.
 - `embed("path")` reads a file at compile time — in comptime blocks
   and as a `comptime embed(...)` constant (baked into the binary).
   Paths are relative to the package directory and may not escape it.
+- Interpolation works at comptime too (values concatenate like
+  gopp.Str). Codegen that emits braces needs DOUBLE escaping: block
+  source `"{{{{"` -> generated source `"{{"` -> output `{`. See
+  examples/jsondemo, which generates per-struct JSON marshalers.
 - Sharp edges, on purpose: renaming a type does not rewrite references
   to it; metaprogramming errors are ordinary diagnostics; fuel-bounded.
 

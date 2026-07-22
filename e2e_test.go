@@ -382,3 +382,11 @@ func TestGoppFormatterProgram(t *testing.T) {
 		t.Fatalf("formatter mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+func TestEndToEndJsonDemo(t *testing.T) {
+	got := compilePkgAndRun(t, "examples/jsondemo")
+	want := "{\"Name\": \"ada \\\"lovelace\\\"\", \"Age\": 36, \"Admin\": true}\n{\"X\": 3, \"Y\": -4}\n{\"Name\": \"\", \"Age\": 0, \"Admin\": false}\n"
+	if got != want {
+		t.Fatalf("jsondemo output:\n got %q\nwant %q", got, want)
+	}
+}

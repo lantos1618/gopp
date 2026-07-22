@@ -137,9 +137,17 @@ func lexAt(src string, base int) ([]token, error) {
 					case d == '\n':
 						return nil, fmt.Errorf("line %d: newline in string literal", line)
 					case d == '{':
+						if j+1 < n && src[j+1] == '{' { // {{ is a literal brace
+							j += 2
+							continue
+						}
 						exprDepth++
 						j++
 					case d == '}': // literal (parser reports the mismatch)
+						if j+1 < n && src[j+1] == '}' { // }} is a literal brace
+							j += 2
+							continue
+						}
 						j++
 					case d == '"':
 					default:

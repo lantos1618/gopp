@@ -23,6 +23,7 @@ var stdlibPackages = map[string]stdlibPkg{
 	"sort":     {sortGopp, sortGo},
 	"rand":     {randGopp, randGo},
 	"filepath": {filepathGopp, filepathGo},
+	"json":     {jsonGopp, jsonGo},
 }
 
 const strGopp = `package str
@@ -246,4 +247,31 @@ func Dir(path string) string     { return filepath.Dir(path) }
 func Ext(path string) string     { return filepath.Ext(path) }
 func Clean(path string) string   { return filepath.Clean(path) }
 func IsAbs(path string) bool     { return filepath.IsAbs(path) }
+`
+
+const jsonGopp = `package json
+
+// JSON scalar emission. Struct marshalers are GENERATED per type via
+// comptime metaprogramming (see examples/jsondemo) — go++ has no any
+// and needs none.
+
+func Quote(s string) string = native
+func Bool(b bool) string = native
+func Float(f float64) string = native
+`
+
+const jsonGo = `package json
+
+import "strconv"
+
+func Quote(s string) string { return strconv.Quote(s) }
+
+func Bool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+func Float(f float64) string { return strconv.FormatFloat(f, 'g', -1, 64) }
 `

@@ -1,0 +1,61 @@
+package main
+
+// json.Marshal without reflection: a comptime block walks the package's
+// structs and GENERATES a marshaler per type. This is the go++ answer
+// to Go's encoding/json — no any, no reflect, full type safety.
+
+import "json"
+import "conv"
+
+type User struct {
+    Name  string
+    Age   int
+    Admin bool
+}
+
+type Point struct {
+    X int
+    Y int
+}
+
+// emitField builds the marshaling expression for one struct field,
+// dispatched on its type — a comptime function called at compile time.
+func emitField(t string, name string) string {
+    if t == "string" { return "json.Quote(v." + name + ")" }
+    if t == "int" { return "conv.Itoa(v." + name + ")" }
+    if t == "bool" { return "json.Bool(v." + name + ")" }
+    if t == "float64" { return "json.Float(v." + name + ")" }
+    return "\"<" + t + ">\""
+}
+
+comptime {
+    for d in decls() {
+        if d.kind == "struct" {
+            body := "return \"{{{{\""
+            first := true
+            for f in d.fields {
+                if !first {
+                    body = body + " + \", \""
+                }
+                first = false
+                body = body + " + \"\\\"" + f.name + "\\\": \" + " + emitField(f.type, f.name)
+            }
+            body = body + " + \"}}}}\""
+            fn := Func("Marshal" + d.name)
+            fn.params.add(Param("v", d))
+            fn.results.add(Param("", "string"))
+            fn.body = body
+            gen(fn)
+            print("generated Marshal" + d.name)
+        }
+    }
+}
+
+func main() {
+    u := User{Name: "ada \"lovelace\"", Age: 36, Admin: true}
+    println(MarshalUser(u))
+    p := Point{X: 3, Y: -4}
+    println(MarshalPoint(p))
+    var z User
+    println(MarshalUser(z))
+}

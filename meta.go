@@ -740,12 +740,29 @@ func (mc *metaCtx) evalExpr(x Expr, env map[string]constVal) (constVal, bool) {
 		if v, ok := env[ex.Name]; ok {
 			return v, true
 		}
+		switch ex.Name {
+		case "true":
+			return boolVal(true), true
+		case "false":
+			return boolVal(false), true
+		}
 		// previously declared things are usable bare: Color is the enum
 		// handle, greet the func handle (called via evalCall)
 		if d := mc.findDecl(ex.Name); d != nil {
 			return mc.wrapDecl(d), true
 		}
 		return mc.fail(ex.Line, "undefined comptime name: %s", ex.Name)
+	case *StringInterpExpr:
+		// interpolation at comptime: literal parts and values concatenate
+		var b strings.Builder
+		for _, pt := range ex.Parts {
+			v, ok := mc.evalExpr(pt, env)
+			if !ok {
+				return constVal{}, false
+			}
+			b.WriteString(metaString(v))
+		}
+		return strVal(b.String()), true
 	case *UnaryExpr:
 		v, ok := mc.evalExpr(ex.X, env)
 		if !ok {
