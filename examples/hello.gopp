@@ -60,4 +60,3 @@ func main() {
         Err(e) -> println("err: " + e)
     }
 }
-

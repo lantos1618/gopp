@@ -46,4 +46,3 @@ func main() {
     v += v
     println(v.X, v.Y)
 }
-

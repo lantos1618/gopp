@@ -45,4 +45,3 @@ func main() {
     println(Inactive.Label())      // default: "zero"
     println(Special{N: 1}.Label()) // override: "special"
 }
-

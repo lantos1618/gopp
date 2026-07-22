@@ -36,4 +36,3 @@ func Locate(p Point) Quadrant {
     if p.X < 0 { return Third }
     return Fourth
 }
-

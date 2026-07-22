@@ -60,4 +60,3 @@ func main() {
     v := Sum(a, b) // T = Vec2 via the Add bound
     println(v.X, v.Y)
 }
-

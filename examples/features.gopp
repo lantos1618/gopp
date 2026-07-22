@@ -87,4 +87,3 @@ func main() {
     scores["alice"] = 90
     println(scores["alice"])
 }
-

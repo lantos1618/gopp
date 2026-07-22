@@ -39,4 +39,3 @@ func main() {
     g[1, 1] = g[1, 1] + 1
     println(g[1, 1])
 }
-

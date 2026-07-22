@@ -34,4 +34,3 @@ func main() {
         Err(e) -> println("nope")
     }
 }
-

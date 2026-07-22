@@ -32,4 +32,3 @@ func main() {
         Box(v) -> println("box", v + 1)
     }
 }
-
