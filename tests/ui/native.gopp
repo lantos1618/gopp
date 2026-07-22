@@ -1,0 +1,10 @@
+package main
+
+// native FFI is stdlib-only: user code cannot declare = native.
+
+func Sneaky(s string) string = native //~ ERROR = native is only allowed in the standard library
+
+func main() {
+    println("ok")
+}
+

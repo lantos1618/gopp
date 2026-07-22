@@ -25,7 +25,7 @@ func checkMeta(t *testing.T, src string) (string, *Diagnostics) {
 	if pd.HasErrors() {
 		t.Fatalf("parse:\n%s", pd)
 	}
-	_, diags := checkImports(f, nil, nil, src)
+	_, diags := checkImports(f, nil, nil, checkOpts{src: src})
 	return buf.String(), diags
 }
 

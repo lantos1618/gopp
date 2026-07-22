@@ -19,23 +19,24 @@ import (
 )
 
 type pkg struct {
-	dir     string        // source directory (absolute)
-	out     string        // output dir relative to the module root ("" = root)
-	name    string        // package clause
-	file    *File         // all files merged, line offsets applied
-	src     string        // concatenated sources (diagnostics render against this)
-	imports []*ImportDecl // merged, deduped by path
-	deps    []*pkg        // parallel to imports
-	diags   *Diagnostics  // load/parse/sema diagnostics for this package
-	chk     *checker      // set by checkGraph
+	dir      string        // source directory (absolute)
+	out      string        // output dir relative to the module root ("" = root)
+	name     string        // package clause
+	file     *File         // all files merged, line offsets applied
+	src      string        // concatenated sources (diagnostics render against this)
+	imports  []*ImportDecl // merged, deduped by path
+	deps     []*pkg        // parallel to imports
+	diags    *Diagnostics  // load/parse/sema diagnostics for this package
+	chk      *checker      // set by checkGraph
+	stdlibGo string        // embedded stdlib: native .go implementation (§FFI)
 }
 
 // loadGraph loads the package in dir and, recursively, its imports.
 func loadGraph(dir string) *pkg {
-	return loadPkg(dir, nil, map[string]*pkg{})
+	return loadPkg(dir, "", nil, map[string]*pkg{})
 }
 
-func loadPkg(dir string, stack []string, cache map[string]*pkg) *pkg {
+func loadPkg(dir string, impPath string, stack []string, cache map[string]*pkg) *pkg {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		p := &pkg{diags: &Diagnostics{}}
@@ -47,6 +48,25 @@ func loadPkg(dir string, stack []string, cache map[string]*pkg) *pkg {
 	}
 	p := &pkg{dir: abs, diags: &Diagnostics{}}
 	cache[abs] = p
+
+	// embedded stdlib fallback: `import "str"` names no directory, so the
+	// compiler's own registry provides the package (stdlib.go)
+	if sp, ok := stdlibPackages[impPath]; ok {
+		if _, derr := os.Stat(abs); derr != nil {
+			toks, lerr := lexAt(sp.src, 0)
+			if lerr != nil {
+				diagFromError(p.diags, lerr)
+				return p
+			}
+			f, parseDiags := parse(toks)
+			p.diags.items = append(p.diags.items, parseDiags.items...)
+			p.file = f
+			p.name = f.PkgName
+			p.src = sp.src
+			p.stdlibGo = sp.impl
+			return p
+		}
+	}
 
 	var names []string
 	if ents, err := os.ReadDir(abs); err != nil {
@@ -133,7 +153,7 @@ func loadPkg(dir string, stack []string, cache map[string]*pkg) *pkg {
 				continue
 			}
 		}
-		dep := loadPkg(depDir, append(append([]string{}, stack...), abs), cache)
+		dep := loadPkg(depDir, imp.Path, append(append([]string{}, stack...), abs), cache)
 		p.imports = append(p.imports, imp)
 		p.deps = append(p.deps, dep)
 		if dep.name == "" {
@@ -202,7 +222,7 @@ func checkGraph(root *pkg) {
 			imports[dep.name] = dep.chk
 			paths[dep.name] = filepath.ToSlash(filepath.Join(p.out, p.imports[i].Path))
 		}
-		chk, semDiags := checkImports(p.file, imports, paths, p.src)
+		chk, semDiags := checkImports(p.file, imports, paths, checkOpts{src: p.src, allowNative: p.stdlibGo != ""})
 		p.chk = chk
 		p.diags.items = append(p.diags.items, semDiags.items...)
 	}
@@ -248,6 +268,11 @@ func emitGraph(root *pkg, outDir string) {
 		}
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(emit(p.file, p.chk)), 0o644); err != nil {
 			fatal(err)
+		}
+		if p.stdlibGo != "" { // embedded stdlib's native implementation
+			if err := os.WriteFile(filepath.Join(dir, "native.go"), []byte(p.stdlibGo), 0o644); err != nil {
+				fatal(err)
+			}
 		}
 	}
 	writePrelude(outDir)

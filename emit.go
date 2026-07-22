@@ -41,7 +41,9 @@ func emit(f *File, c *checker) string {
 		case *ImplDecl:
 			e.emitImpl(dd)
 		case *FuncDecl:
-			e.emitFunc(dd)
+			if !dd.Native { // native funcs come from the package's .go file
+				e.emitFunc(dd)
+			}
 		}
 	}
 	// §14: prelude operator interfaces actually referenced by an impl or

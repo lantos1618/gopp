@@ -144,6 +144,20 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   end (§7), so `Ok(1)` against `Result[int64, string]` solves T=int64
   and the literal still gets its overflow check.
 
+## Standard library & native FFI
+
+- `import "str"` / `import "conv"` name no directory on disk, so the
+  compiler's embedded registry (stdlib.go) provides the package: a .gopp
+  API declaration plus a native Go implementation. A real directory with
+  the same name always wins.
+- `func ToUpper(s string) string = native` — the declaration is checked
+  normally; the body comes from the package's native.go. `= native` is
+  stdlib-only; user code gets "= native is only allowed in the standard
+  library".
+- `str`: ToUpper, ToLower, Trim, Contains, HasPrefix, HasSuffix,
+  Replace, Repeat, Split, Join. `conv`: Itoa, Atoi (returns
+  `Result[int, string]` — errors are values even across the FFI).
+
 ## Scopes & names (§3)
 
 - Shadowing: allowed across scopes; `:=` redeclaration within the same

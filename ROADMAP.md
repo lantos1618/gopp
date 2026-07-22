@@ -73,8 +73,9 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
    ~~comptime metaprogramming (§10)~~ ✅ · ~~sema columns (§11)~~ ✅ ·
    ~~LSP v1 (§28)~~ ✅ · ~~CI/README/`gopp run`~~ ✅ ·
    ~~comptime match + string builtins~~ ✅
-2. **§8 leftovers** — impls on generic types, cross-package impls,
-   default method bodies; **§14 leftovers** — compound assign, indexing.
+2. **§8/§14 leftovers** — impls on generic types, cross-package impls,
+   default method bodies, compound assign, indexing overloads.
+   ~~stdlib v1 (str, conv + native FFI)~~ ✅
 3. **§17 interning + §1 integer IDs** — when compile times or LSP make
    them pay; both are wrappers, not rewrites, by design.
 4. **LSP v2** — import-aware analysis, local-var definitions, column

@@ -297,6 +297,7 @@ type checker struct {
 	qualified   map[Expr]string   // value exprs referencing a dependency (foo.Bar) -> qualifier
 	declPkg     map[Decl]string   // foreign enum/struct decl -> owning package qualifier
 	src         string            // package source (for comptime .body text)
+	allowNative bool              // stdlib: `= native` declarations permitted
 }
 
 func preludeEnums() []*EnumDecl {
@@ -326,13 +327,21 @@ func exported(name string) bool {
 // collected diagnostics (§0): the caller decides whether to proceed to
 // codegen (only when diags.HasErrors() is false).
 func check(f *File) (*checker, *Diagnostics) {
-	return checkImports(f, nil, nil, "")
+	return checkImports(f, nil, nil)
+}
+
+// checkOpts tunes a check run: src feeds comptime .body text and
+// multi-file diagnostics; allowNative permits `= native` declarations
+// (stdlib packages only — user code gets an error).
+type checkOpts struct {
+	src         string
+	allowNative bool
 }
 
 // checkImports is check with a package context: imports maps qualifiers to
 // already-checked dependency checkers, importPaths to their Go import
-// paths for emission; src is the package source (comptime .body text).
-func checkImports(f *File, imports map[string]*checker, importPaths map[string]string, src ...string) (*checker, *Diagnostics) {
+// paths for emission.
+func checkImports(f *File, imports map[string]*checker, importPaths map[string]string, opts ...checkOpts) (*checker, *Diagnostics) {
 	c := &checker{
 		diag:                &Diagnostics{},
 		enums:               map[string]*EnumDecl{},
@@ -366,8 +375,9 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 	for qual, path := range importPaths {
 		c.importPaths[qual] = path
 	}
-	if len(src) > 0 {
-		c.src = src[0]
+	if len(opts) > 0 {
+		c.src = opts[0].src
+		c.allowNative = opts[0].allowNative
 	}
 	// §10 metaprogramming: comptime blocks run BEFORE any registration or
 	// resolution, so their mutations and gen'd declarations are exactly
@@ -473,6 +483,10 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 				c.diag.errorf(fn.Line, "duplicate function %s", fn.Name)
 				continue
 			}
+			if fn.Native && !c.allowNative {
+				c.diag.errorf(fn.Line, "= native is only allowed in the standard library")
+				continue
+			}
 			c.curTypeParams = fn.TypeParams // T resolves rigidly in the sig
 			ft := &tFunc{typeParams: fn.TypeParams, bounds: fn.Bounds}
 			for _, p := range fn.Params {
@@ -500,7 +514,7 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 	for _, d := range f.Decls {
 		if fn, ok := d.(*FuncDecl); ok {
 			ft := c.funcs[fn.Name]
-			if ft == nil { // duplicate definition; first one was checked
+			if ft == nil || fn.Body == nil { // duplicate, or native (no body)
 				continue
 			}
 			c.curResults = ft.results

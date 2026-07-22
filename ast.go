@@ -36,7 +36,8 @@ type FuncDecl struct {
 	Bounds     []string // parallel to TypeParams: behavior bound or "" (§8)
 	Params     []Field
 	Results    []Field // 0 or 1 used in practice
-	Body       *Block
+	Body       *Block  // nil for native functions (stdlib FFI)
+	Native     bool    // declared `= native`: implemented by a .go file
 	Line       int
 	Col        int
 }

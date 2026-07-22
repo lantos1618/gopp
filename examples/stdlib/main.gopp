@@ -1,0 +1,30 @@
+package main
+
+// Embedded stdlib: import "str" / "conv" names no directory, so the
+// compiler's registry provides the package (native Go implementations).
+import "str"
+import "conv"
+
+func shout(s string) string {
+    return str.ToUpper(s) + "!"
+}
+
+func main() {
+    println(shout("go++"))
+    println(str.Join(str.Split("a,b,c", ","), "-"))
+    println(str.Contains("gopp", "pp"))
+    println(str.HasPrefix("gopher", "go"))
+    println(str.Replace("aaa", "a", "b"))
+    println(conv.Itoa(42) + "!")
+    r := conv.Atoi("123")
+    match r {
+        Ok(v) -> println(v + 1)
+        Err(e) -> println("err", e)
+    }
+    b := conv.Atoi("nope")
+    match b {
+        Ok(v) -> println(v)
+        Err(e) -> println("err")
+    }
+}
+

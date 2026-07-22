@@ -15,14 +15,29 @@ package main
 // types side table is fully populated.
 func (c *checker) checkFlow(f *File) {
 	for _, d := range f.Decls {
-		fn, ok := d.(*FuncDecl)
-		if !ok {
-			continue
-		}
-		c.scanUnreachable(fn.Body.List)
-		if ft := c.funcs[fn.Name]; ft != nil && len(ft.results) > 0 {
-			if !c.listDiverges(fn.Body.List) {
-				c.diag.errorf(fn.Line, "function %s: missing return (some path falls through without returning)", fn.Name)
+		switch fn := d.(type) {
+		case *FuncDecl:
+			if fn.Body == nil { // native
+				continue
+			}
+			c.scanUnreachable(fn.Body.List)
+			if ft := c.funcs[fn.Name]; ft != nil && len(ft.results) > 0 {
+				if !c.listDiverges(fn.Body.List) {
+					c.diag.errorf(fn.Line, "function %s: missing return (some path falls through without returning)", fn.Name)
+				}
+			}
+		case *ImplDecl:
+			it, _ := fn.Type.(*IdentType)
+			for _, m := range fn.Methods {
+				if m.Body == nil || it == nil || c.methods[it.Name] == nil {
+					continue
+				}
+				c.scanUnreachable(m.Body.List)
+				if ft := c.methods[it.Name][m.Name]; ft != nil && len(ft.results) > 0 {
+					if !c.listDiverges(m.Body.List) {
+						c.diag.errorf(m.Line, "method %s: missing return (some path falls through without returning)", m.Name)
+					}
+				}
 			}
 		}
 	}

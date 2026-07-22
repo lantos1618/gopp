@@ -24,7 +24,7 @@ func compileAndRun(t *testing.T, srcPath string) string {
 	if parseDiags.HasErrors() {
 		t.Fatalf("parse:\n%s", parseDiags)
 	}
-	chk, diags := checkImports(file, nil, nil, string(src))
+	chk, diags := checkImports(file, nil, nil, checkOpts{src: string(src)})
 	if diags.HasErrors() {
 		t.Fatalf("check:\n%s", diags)
 	}
@@ -151,6 +151,14 @@ func TestEndToEndOperators(t *testing.T) {
 	want := "11 22\n9 18\n-1 -2\ntrue\ntrue\ntrue\ntrue\n11 22\n"
 	if got != want {
 		t.Fatalf("operators.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestEndToEndStdlib(t *testing.T) {
+	got := compilePkgAndRun(t, "examples/stdlib")
+	want := "GO++!\na-b-c\ntrue\ntrue\nbbb\n42!\n124\nerr\n"
+	if got != want {
+		t.Fatalf("stdlib output:\n got %q\nwant %q", got, want)
 	}
 }
 

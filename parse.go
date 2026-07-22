@@ -264,6 +264,13 @@ func (p *parser) parseFuncDecl() Decl {
 		results = []Field{{Type: p.parseType(), Line: p.cur().line}}
 	}
 	p.skipNL()
+	if p.cur().text == "=" { // func F(...) ... = native — stdlib FFI
+		p.next()
+		if kw := p.expectIdent(); kw != "native" {
+			p.errorft(tk, "expected `native` after =, got %q", kw)
+		}
+		return &FuncDecl{Name: name, TypeParams: typeParams, Bounds: bounds, Params: params, Results: results, Native: true, Line: tk.line, Col: tk.col}
+	}
 	body := p.parseBlock()
 	return &FuncDecl{Name: name, TypeParams: typeParams, Bounds: bounds, Params: params, Results: results, Body: body, Line: tk.line, Col: tk.col}
 }

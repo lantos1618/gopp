@@ -341,7 +341,7 @@ func (s *lspServer) openDoc(uri, text string) {
 		diags.items = append(diags.items, pdiags.items...)
 		d.f = f
 		if !diags.HasErrors() {
-			chk, cdiags := checkImports(f, nil, nil, text)
+			chk, cdiags := checkImports(f, nil, nil, checkOpts{src: text})
 			diags.items = append(diags.items, cdiags.items...)
 			d.chk = chk
 		}
