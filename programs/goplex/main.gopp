@@ -1,0 +1,238 @@
+package main
+
+// goplex — the go++ lexer, written in go++. The first piece of the
+// self-hosting compiler: go++ source in, tokens out. Ported from the
+// compiler's lex.go, including the interpolation state machine.
+
+import "str"
+import "os"
+
+enum Tok {
+    Ident(s string)
+    Number(s string)
+    Str(s string)
+    Rune(s string)
+    Op(s string)
+    Newline
+    Eof
+}
+
+type Lexer struct {
+    src  string
+    i    int
+    line int
+}
+
+func isAlpha(c byte) bool {
+    return (c >= byte('a') && c <= byte('z')) || (c >= byte('A') && c <= byte('Z'))
+}
+
+func isDigit(c byte) bool {
+    return c >= byte('0') && c <= byte('9')
+}
+
+func show(t Tok) string {
+    return match t {
+        Ident(s) -> "ident " + s
+        Number(s) -> "num " + s
+        Str(s) -> "str"
+        Rune(s) -> "rune"
+        Op(s) -> "op " + s
+        Newline -> "nl"
+        Eof -> "eof"
+    }
+}
+
+func isOp1(c byte) bool {
+    return contains("+-*/%&|^<>=!~()[]{{}},;.:@#?", string(rune(c)))
+}
+
+func next(l *Lexer) Tok {
+    for l.i < len(l.src) {
+        c := l.src[l.i]
+        if c == byte(' ') || c == byte('\t') || c == byte('\r') {
+            l.i++
+            continue
+        }
+        if c == byte('\n') {
+            l.line++
+            l.i++
+            return Newline
+        }
+        if c == byte('/') && l.i+1 < len(l.src) && l.src[l.i+1] == byte('/') {
+            for l.i < len(l.src) && l.src[l.i] != byte('\n') {
+                l.i++
+            }
+            continue
+        }
+        if c == byte('/') && l.i+1 < len(l.src) && l.src[l.i+1] == byte('*') {
+            l.i = l.i + 2
+            nls := false
+            for l.i+1 < len(l.src) && !(l.src[l.i] == byte('*') && l.src[l.i+1] == byte('/')) {
+                if l.src[l.i] == byte('\n') {
+                    nls = true
+                    l.line++
+                }
+                l.i++
+            }
+            l.i = l.i + 2
+            if nls {
+                return Newline
+            }
+            continue
+        }
+        if isAlpha(c) || c == byte('_') {
+            j := l.i + 1
+            for j < len(l.src) && (isAlpha(l.src[j]) || isDigit(l.src[j]) || l.src[j] == byte('_')) {
+                j++
+            }
+            s := l.src[l.i:j]
+            l.i = j
+            return Ident(s)
+        }
+        if isDigit(c) {
+            j := l.i
+            for j < len(l.src) && (isDigit(l.src[j]) || isAlpha(l.src[j]) || l.src[j] == byte('.') || l.src[j] == byte('_')) {
+                j++
+            }
+            s := l.src[l.i:j]
+            l.i = j
+            return Number(s)
+        }
+        if c == byte('"') {
+            return lexString(l)
+        }
+        if c == byte('\'') {
+            j := l.i + 1
+            for j < len(l.src) && l.src[j] != byte('\'') {
+                if l.src[j] == byte('\\') {
+                    j++
+                }
+                j++
+            }
+            s := l.src[l.i : j+1]
+            l.i = j + 1
+            return Rune(s)
+        }
+        // operators: 3 chars, then 2, then 1
+        if l.i+3 <= len(l.src) {
+            t := l.src[l.i : l.i+3]
+            if t == "<<=" || t == ">>=" || t == "&^=" || t == "..." {
+                l.i = l.i + 3
+                return Op(t)
+            }
+        }
+        if l.i+2 <= len(l.src) {
+            t := l.src[l.i : l.i+2]
+            if contains("<< >> &^ == != <= >= && || <- -> ++ -- := += -= *= /= %= &= |= ^=", t) {
+                l.i = l.i + 2
+                return Op(t)
+            }
+        }
+        if isOp1(c) {
+            l.i++
+            return Op(string(rune(c)))
+        }
+        // unknown byte: skip it (the real lexer errors; goplex v1 skips)
+        l.i++
+    }
+    return Eof
+}
+
+// lexString scans a string with interpolation: { enters expression
+// mode, where quotes start nested strings; the outer quote closes only
+// in string-text mode.
+func lexString(l *Lexer) Tok {
+    j := l.i + 1
+    exprDepth := 0
+    for j < len(l.src) {
+        d := l.src[j]
+        if exprDepth == 0 {
+            if d == byte('\\') {
+                j = j + 2
+                continue
+            }
+            if d == byte('\n') {
+                break
+            }
+            if d == byte('{') && j+1 < len(l.src) && l.src[j+1] == byte('{') {
+                j = j + 2
+                continue
+            }
+            if d == byte('{') {
+                exprDepth++
+                j++
+                continue
+            }
+            if d == byte('}') && j+1 < len(l.src) && l.src[j+1] == byte('}') {
+                j = j + 2
+                continue
+            }
+            if d == byte('}') {
+                j++
+                continue
+            }
+            if d == byte('"') {
+                break
+            }
+            j++
+            continue
+        }
+        // expression mode
+        if d == byte('\n') {
+            break
+        }
+        if d == byte('"') {
+            q := j
+            j++
+            for j < len(l.src) && l.src[j] != byte('"') && l.src[j] != byte('\n') {
+                if l.src[j] == byte('\\') {
+                    j++
+                }
+                j++
+            }
+            if j >= len(l.src) || l.src[j] == byte('\n') {
+                j = q
+                break
+            }
+            j++
+            continue
+        }
+        if d == byte('{') {
+            exprDepth++
+            j++
+            continue
+        }
+        if d == byte('}') {
+            exprDepth--
+            j++
+            continue
+        }
+        j++
+    }
+    s := l.src[l.i : j+1]
+    l.i = j + 1
+    return Str(s)
+}
+
+func main() {
+    args := os.Args()
+    if len(args) < 2 {
+        println("usage: goplex <file.gopp>")
+        os.Exit(2)
+    }
+    r := os.ReadFile(args[1])
+    match r {
+        Ok(src) -> {
+            lx := Lexer{src: src, i: 0, line: 1}
+            loop {
+                t := next(&lx)
+                println(lx.line, show(t))
+                if t == Eof {
+                    break loop
+                }
+            }
+        }
+        Err(e) -> println("goplex:", e)
+    }
+}

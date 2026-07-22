@@ -471,6 +471,17 @@ drop order) do not apply and are deliberately deleted from the roadmap.
 - Assertions are builtins: `assert(cond)`, `assertEq(a, b)` (basic
   types). Test functions in dependencies are not run.
 
+## Self-hosting (in progress)
+
+- `programs/gofmt` — the formatter, in go++ (byte-equivalent to the
+  compiler's Go formatter).
+- `programs/goplex` — the lexer, in go++ (golden-tested token stream,
+  interpolation state machine included).
+- `examples/jsondemo` — a pure-go++ JSON parser in the stdlib plus
+  comptime-generated (un)marshalers.
+- The compiler itself remains Go; these programs are the proof of
+  viability and the milestone path (lexer -> parser -> sema -> emit).
+
 ## Testing (§12)
 
 - `tests/ui/*.gopp`: `//~ ERROR msg` / `//~ WARN msg` annotations matched

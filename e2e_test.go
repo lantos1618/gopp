@@ -414,3 +414,58 @@ func TestEndToEndActors(t *testing.T) {
 		t.Fatalf("actors.gopp output:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestGoplexProgram runs the go++-written lexer (programs/goplex) on a
+// fixture and compares against the expected token stream — the first
+// self-hosting milestone.
+func TestGoplexProgram(t *testing.T) {
+	fixture := "package main\n\nfunc main() {\n    x := 42\n    println(\"hi {x}!\")\n}\n"
+	want := `1 ident package
+1 ident main
+2 nl
+3 nl
+3 ident func
+3 ident main
+3 op (
+3 op )
+3 op {
+4 nl
+4 ident x
+4 op :=
+4 num 42
+5 nl
+5 ident println
+5 op (
+5 str
+5 op )
+6 nl
+6 op }
+7 nl
+7 eof
+`
+	root := loadGraph("programs/goplex")
+	checkGraph(root)
+	if graphHasErrors(root) {
+		for _, p := range topoOrder(root) {
+			if len(p.diags.items) > 0 {
+				t.Logf("# %s\n%s", p.dir, p.diags.Render(p.src))
+			}
+		}
+		t.Fatal("checkGraph failed")
+	}
+	out := t.TempDir()
+	emitGraph(root, out)
+	path := filepath.Join(out, "lexme.gopp")
+	if err := os.WriteFile(path, []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "run", ".", path)
+	cmd.Dir = out
+	got, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("goplex failed: %v\n%s", err, got)
+	}
+	if string(got) != want {
+		t.Fatalf("goplex output:\n got %q\nwant %q", got, want)
+	}
+}
