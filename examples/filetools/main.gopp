@@ -1,0 +1,29 @@
+package main
+
+// Embedded stdlib: path manipulation (filepath) plus duration
+// arithmetic (time). All deterministic — no clock, no randomness.
+import "filepath"
+import "time"
+import "conv"
+
+func main() {
+    var parts []string
+    parts = append(parts, "a")
+    parts = append(parts, "b")
+    parts = append(parts, "c")
+    println(filepath.Join(parts))
+    println(filepath.Base("/home/gopher/notes.txt"))
+    println(filepath.Dir("/home/gopher/notes.txt"))
+    println(filepath.Ext("/home/gopher/notes.txt"))
+    println(filepath.Clean("/a//b/../c"))
+    println(filepath.IsAbs("/a/b"))
+    println(filepath.IsAbs("a/b"))
+
+    d := time.Hours(1.5)
+    println(d)
+    println(time.Add(d, 500 * ms))
+    println(time.Minutes(2.5))
+    println(time.Seconds(90) > minute)
+    println(time.Since(time.Unix()) < second)
+    println(conv.Itoa(int(time.Hours(2.0) / second)))
+}

@@ -15,13 +15,14 @@ type stdlibPkg struct {
 }
 
 var stdlibPackages = map[string]stdlibPkg{
-	"str":  {strGopp, strGo},
-	"conv": {convGopp, convGo},
-	"math": {mathGopp, mathGo},
-	"os":   {osGopp, osGo},
-	"time": {timeGopp, timeGo},
-	"sort": {sortGopp, sortGo},
-	"rand": {randGopp, randGo},
+	"str":      {strGopp, strGo},
+	"conv":     {convGopp, convGo},
+	"math":     {mathGopp, mathGo},
+	"os":       {osGopp, osGo},
+	"time":     {timeGopp, timeGo},
+	"sort":     {sortGopp, sortGo},
+	"rand":     {randGopp, randGo},
+	"filepath": {filepathGopp, filepathGo},
 }
 
 const strGopp = `package str
@@ -155,12 +156,17 @@ func WriteFile(path string, content string) gopp.Result[bool, string] {
 
 const timeGopp = `package time
 
-// Clock and sleeping. Durations are go++'s own duration type
-// (ms / second / minute shorthands work).
+// Clock, sleeping, and duration arithmetic. Durations are go++'s own
+// duration type (ms / second / minute shorthands work).
 
 func Sleep(d duration) = native
 func Unix() int = native
 func UnixMillis() int = native
+func Since(t int) duration = native
+func Add(d duration, delta duration) duration = native
+func Hours(n float64) duration = native
+func Minutes(n float64) duration = native
+func Seconds(n float64) duration = native
 `
 
 const timeGo = `package time
@@ -170,6 +176,14 @@ import "time"
 func Sleep(d time.Duration) { time.Sleep(d) }
 func Unix() int             { return int(time.Now().Unix()) }
 func UnixMillis() int       { return int(time.Now().UnixMilli()) }
+
+func Since(t int) time.Duration { return time.Since(time.Unix(int64(t), 0)) }
+func Add(d time.Duration, delta time.Duration) time.Duration {
+	return d + delta
+}
+func Hours(n float64) time.Duration   { return time.Duration(n * float64(time.Hour)) }
+func Minutes(n float64) time.Duration { return time.Duration(n * float64(time.Minute)) }
+func Seconds(n float64) time.Duration { return time.Duration(n * float64(time.Second)) }
 `
 
 const sortGopp = `package sort
@@ -208,4 +222,28 @@ import "math/rand/v2"
 func Intn(n int) int     { return rand.IntN(n) }
 func Float64() float64   { return rand.Float64() }
 func Shuffle(xs []int)   { rand.Shuffle(len(xs), func(i, j int) { xs[i], xs[j] = xs[j], xs[i] }) }
+`
+
+const filepathGopp = `package filepath
+
+// Filesystem path manipulation, backed by Go's path/filepath.
+
+func Join(parts []string) string = native
+func Base(path string) string = native
+func Dir(path string) string = native
+func Ext(path string) string = native
+func Clean(path string) string = native
+func IsAbs(path string) bool = native
+`
+
+const filepathGo = `package filepath
+
+import "path/filepath"
+
+func Join(parts []string) string { return filepath.Join(parts...) }
+func Base(path string) string    { return filepath.Base(path) }
+func Dir(path string) string     { return filepath.Dir(path) }
+func Ext(path string) string     { return filepath.Ext(path) }
+func Clean(path string) string   { return filepath.Clean(path) }
+func IsAbs(path string) bool     { return filepath.IsAbs(path) }
 `

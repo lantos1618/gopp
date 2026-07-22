@@ -186,6 +186,14 @@ func TestEndToEndIndexOverload(t *testing.T) {
 	}
 }
 
+func TestEndToEndFiletools(t *testing.T) {
+	got := compilePkgAndRun(t, "examples/filetools")
+	want := "a/b/c\nnotes.txt\n/home/gopher\n.txt\n/a/c\ntrue\nfalse\n1h30m0s\n1h30m0.5s\n2m30s\ntrue\ntrue\n7200\n"
+	if got != want {
+		t.Fatalf("filetools output:\n got %q\nwant %q", got, want)
+	}
+}
+
 // writePkg makes a one-file package in dir/name for loader unit tests.
 func writePkg(t *testing.T, dir, name, src string) {
 	t.Helper()
