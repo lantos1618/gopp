@@ -233,6 +233,15 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   `unreachable pattern` warning.
 - Guards on channel arms are rejected (Go channels can't peek).
 
+## Range loops (for-in)
+
+- `for x in xs { }` ranges a slice (elements), a map (values), or a
+  channel (receives until close) — Go range semantics. The two-variable
+  form `for i, x in xs` binds index (slice) or key (map) first; channels
+  yield values only.
+- `_` binds nothing. `break` works as in any loop. Comptime for-in is
+  unchanged (lists, single variable).
+
 ## Flow (§9)
 
 - All-paths-return: a function with results must return or diverge on

@@ -216,10 +216,12 @@ type LoopStmt struct {
 	Col  int
 }
 
-// ForInStmt is `for x in expr { }` — comptime-only iteration over a
-// comptime list (§10); outside a comptime block sema rejects it.
+// ForInStmt is `for x in expr { }` — ranging over a slice, map, or
+// channel at runtime (Go range), or a comptime list (§10). One variable
+// binds the element/value; the two-variable form binds index/key first.
 type ForInStmt struct {
-	Var  string
+	Var  string // single var: element/value; two vars: index/key
+	Var2 string // "" = single-var form; otherwise the element/value
 	X    Expr
 	Body *Block
 	Line int

@@ -1277,7 +1277,39 @@ func (c *checker) checkStmt(s Stmt) {
 		c.checkStmts(st.List)
 		c.pop()
 	case *ForInStmt:
-		c.diag.errorfAt(st.Line, st.Col, "for-in is only supported inside comptime blocks")
+		xt := c.checkExpr(st.X)
+		if isErr(xt) {
+			return
+		}
+		var elem, key Type
+		switch t := xt.(type) {
+		case *tSlice:
+			elem, key = t.elem, tint
+		case *tMap:
+			elem, key = t.v, t.k
+		case *tChan:
+			elem = t.elem
+		default:
+			c.diag.errorfAt(st.Line, st.Col, "cannot range over %s (need slice, map, or chan)", xt)
+			return
+		}
+		if st.Var2 != "" && key == nil {
+			c.diag.errorfAt(st.Line, st.Col, "ranging over %s yields values only (no index/key)", xt)
+			return
+		}
+		c.child()
+		if st.Var2 != "" { // two vars: Var is index/key, Var2 the element
+			if st.Var != "_" {
+				c.cur.vars[st.Var] = key
+			}
+			if st.Var2 != "_" {
+				c.cur.vars[st.Var2] = elem
+			}
+		} else if st.Var != "_" {
+			c.cur.vars[st.Var] = elem
+		}
+		c.checkStmts(st.Body.List)
+		c.pop()
 	case *VarStmt:
 		ty := c.resolveType(st.Type)
 		if st.Init != nil {

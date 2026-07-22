@@ -630,22 +630,38 @@ func (p *parser) parseIf() Stmt {
 	return &IfStmt{Cond: cond, Then: then, Else: els, Line: tk.line, Col: tk.col}
 }
 
+// parseForInExpr parses the ranged-over expression of a for-in loop,
+// keeping the body's { safe from struct-literal parsing.
+func (p *parser) parseForInExpr() Expr {
+	save := p.noStructLit
+	p.noStructLit = true
+	x := p.parseExpr(1)
+	p.noStructLit = save
+	return x
+}
+
 func (p *parser) parseFor() Stmt {
 	tk := p.next() // for
 	line, col := tk.line, tk.col
 	if p.cur().text == "{" {
 		return &ForStmt{Body: p.parseBlock(), Line: line, Col: col}
 	}
-	// for x in expr { } — comptime-only iteration (§10); sema rejects it
-	// in ordinary code
+	// for x in expr { } / for i, x in expr { } — range loops (runtime)
+	// and comptime iteration (§10)
 	if p.cur().kind == kIdent && p.peek().text == "in" {
 		v := p.next().text
 		p.next() // in
-		save := p.noStructLit
-		p.noStructLit = true // the body's { must not parse as a struct literal
-		x := p.parseExpr(1)
-		p.noStructLit = save
+		x := p.parseForInExpr()
 		return &ForInStmt{Var: v, X: x, Body: p.parseBlock(), Line: line, Col: col}
+	}
+	if p.cur().kind == kIdent && p.peek().text == "," &&
+		p.toks[p.pos+2].kind == kIdent && p.toks[p.pos+3].text == "in" {
+		v := p.next().text
+		p.next() // ,
+		v2 := p.next().text
+		p.next() // in
+		x := p.parseForInExpr()
+		return &ForInStmt{Var: v, Var2: v2, X: x, Body: p.parseBlock(), Line: line, Col: col}
 	}
 	save := p.noStructLit
 	p.noStructLit = true

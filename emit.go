@@ -552,6 +552,18 @@ func (e *emitter) emitStmt(s Stmt) {
 		e.emitStmts(st.Body.List)
 		e.s("}\n")
 		e.loops = e.loops[:len(e.loops)-1]
+	case *ForInStmt:
+		x := e.expr(st.X)
+		switch {
+		case st.Var2 != "":
+			e.s("for %s, %s := range %s {\n", st.Var, st.Var2, x)
+		case isChanType(e.c.types[st.X]):
+			e.s("for %s := range %s {\n", st.Var, x)
+		default:
+			e.s("for _, %s := range %s {\n", st.Var, x)
+		}
+		e.emitStmts(st.Body.List)
+		e.s("}\n")
 	case *BreakStmt:
 		if st.Label == "loop" {
 			e.s("break %s\n", e.loops[len(e.loops)-1])
@@ -709,6 +721,12 @@ func (e *emitter) expr(x Expr) string {
 		return "[]" + e.typeExprGo(ex.Elem) + "{" + strings.Join(parts, ", ") + "}"
 	}
 	return "/* unhandled expr */"
+}
+
+// isChanType reports whether t is a channel type.
+func isChanType(t Type) bool {
+	_, ok := t.(*tChan)
+	return ok
 }
 
 // ctorRef names a variant constructor: local enums are prefixed

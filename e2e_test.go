@@ -283,3 +283,11 @@ func main() {
 		t.Fatalf("qualifier should have been shadowed, got:\n%s", got)
 	}
 }
+
+func TestEndToEndForIn(t *testing.T) {
+	got := compileAndRun(t, "examples/forin.gopp")
+	want := "60\n0 10\n1 20\n2 30\n3\n2\n15\n1\n"
+	if got != want {
+		t.Fatalf("forin.gopp output:\n got %q\nwant %q", got, want)
+	}
+}

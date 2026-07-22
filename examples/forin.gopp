@@ -1,0 +1,59 @@
+package main
+
+// for-in at runtime: range loops over slices, maps, and channels.
+
+func main() {
+    // slice: element
+    xs := []int{10, 20, 30}
+    total := 0
+    for x in xs {
+        total += x
+    }
+    println(total)
+
+    // slice: index + element
+    for i, x in xs {
+        println(i, x)
+    }
+
+    // map: value, then key + value
+    var m map[string]int
+    m["a"] = 1
+    m["b"] = 2
+    sum := 0
+    for v in m {
+        sum += v
+    }
+    println(sum)
+    keys := 0
+    for k, v in m {
+        if k == "a" && v == 1 {
+            keys++
+        }
+        if k == "b" && v == 2 {
+            keys++
+        }
+    }
+    println(keys)
+
+    // chan: receive until closed
+    ch := chan[int](2)
+    ch.send(7)
+    ch.send(8)
+    ch.close()
+    got := 0
+    for n in ch {
+        got += n
+    }
+    println(got)
+
+    // break works like any loop
+    count := 0
+    for x in xs {
+        if x > 15 {
+            break
+        }
+        count++
+    }
+    println(count)
+}

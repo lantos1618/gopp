@@ -475,6 +475,10 @@ func (mc *metaCtx) execStmt(s Stmt, env map[string]constVal) (metaFlow, bool) {
 		}
 		return metaFlow{}, true
 	case *ForInStmt:
+		if st.Var2 != "" {
+			mc.fail(st.Line, "index bindings are not supported in comptime for-in")
+			return metaFlow{}, false
+		}
 		lv, ok := mc.evalExpr(st.X, env)
 		if !ok {
 			return metaFlow{}, false
