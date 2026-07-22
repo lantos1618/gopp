@@ -25,7 +25,7 @@ import (
 //   - match on a subject (variants, literals, bindings, guards) with
 //     compile-time exhaustiveness checking; match without a subject over
 //     channel arms (recv/send/after/_) or boolean arms
-//   - chan[T](cap) construction and .send/.recv/.close methods
+//   - chan<T>(cap) construction and .send/.recv/.close methods
 //   - loop { } with break loop
 //   - maps instantiated on declaration: var m map<K, V> lowers to make(...)
 //   - Result[T,E] / Option[T] from the emitted prelude, with ? try

@@ -121,7 +121,7 @@ func typeExprString(te TypeExpr) string {
 	case *MapType:
 		return "map<" + typeExprString(t.K) + ", " + typeExprString(t.V) + ">"
 	case *ChanType:
-		return "chan[" + typeExprString(t.Elem) + "]"
+		return "chan<" + typeExprString(t.Elem) + ">"
 	case *SliceType:
 		return "[]" + typeExprString(t.Elem)
 	case *StarType:

@@ -1,6 +1,6 @@
 package main
 func g() int {
-    ch := chan[int](1)
+    ch := chan<int>(1)
     v := <-ch //~ ERROR <- was removed in go++
     _ = v
     return 0

@@ -37,7 +37,7 @@ func main() {
     println(keys)
 
     // chan: receive until closed
-    ch := chan[int](2)
+    ch := chan<int>(2)
     ch.send(7)
     ch.send(8)
     ch.close()

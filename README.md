@@ -80,7 +80,7 @@ Channels + match-as-select, and maps that can't be nil (from
 `examples/features.gopp`):
 
 ```go
-ch := chan[int](1)
+ch := chan<int>(1)
 ch.send(42)
 got := match {
     v := ch.recv() -> v

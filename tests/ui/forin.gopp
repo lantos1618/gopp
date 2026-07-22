@@ -7,8 +7,8 @@ func main() {
     for x in n { //~ ERROR cannot range over int (need slice, map, or chan)
         println(x)
     }
-    ch := chan[int](1)
-    for i, v in ch { //~ ERROR ranging over chan int yields values only (no index/key)
+    ch := chan<int>(1)
+    for i, v in ch { //~ ERROR ranging over chan<int> yields values only (no index/key)
         println(i, v)
     }
     xs := []string{"a"}

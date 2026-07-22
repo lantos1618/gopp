@@ -53,7 +53,7 @@ func main() {
     println(msg)
 
     // channels without arrows + match as select
-    ch := chan[Status](1)
+    ch := chan<Status>(1)
     ch.send(s)
     match {
         _ := ch.recv() -> println("recv fired")
@@ -116,7 +116,7 @@ func main() {
     println(keys)
 
     // chan: receive until closed
-    ch := chan[int](2)
+    ch := chan<int>(2)
     ch.send(7)
     ch.send(8)
     ch.close()
