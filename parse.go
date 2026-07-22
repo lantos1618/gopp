@@ -617,9 +617,9 @@ func (p *parser) parseStmt() Stmt {
 	case "select", "switch", "case":
 		p.errorft(tk, "%q was removed in go++ — use match", tk.text)
 	case "continue":
-			tk := p.next()
-			return &ContinueStmt{Line: tk.line, Col: tk.col}
-		case "go", "defer", "const", "type", "import", "goto":
+		tk := p.next()
+		return &ContinueStmt{Line: tk.line, Col: tk.col}
+	case "go", "defer", "const", "type", "import", "goto":
 		p.errorft(tk, "%q is not supported in v2 yet", tk.text)
 	}
 	lhs := p.parseExprList()

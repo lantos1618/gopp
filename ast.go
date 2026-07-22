@@ -253,18 +253,18 @@ type IncDecStmt struct {
 	Col  int
 }
 
-func (*Block) stmtNode()      {}
-func (*VarStmt) stmtNode()    {}
-func (*ExprStmt) stmtNode()   {}
-func (*AssignStmt) stmtNode() {}
-func (*IfStmt) stmtNode()     {}
-func (*ForStmt) stmtNode()    {}
-func (*ForInStmt) stmtNode()  {}
-func (*LoopStmt) stmtNode()   {}
-func (*BreakStmt) stmtNode()  {}
+func (*Block) stmtNode()        {}
+func (*VarStmt) stmtNode()      {}
+func (*ExprStmt) stmtNode()     {}
+func (*AssignStmt) stmtNode()   {}
+func (*IfStmt) stmtNode()       {}
+func (*ForStmt) stmtNode()      {}
+func (*ForInStmt) stmtNode()    {}
+func (*LoopStmt) stmtNode()     {}
+func (*BreakStmt) stmtNode()    {}
 func (*ContinueStmt) stmtNode() {}
-func (*ReturnStmt) stmtNode() {}
-func (*IncDecStmt) stmtNode() {}
+func (*ReturnStmt) stmtNode()   {}
+func (*IncDecStmt) stmtNode()   {}
 
 // ---------- expressions ----------
 
