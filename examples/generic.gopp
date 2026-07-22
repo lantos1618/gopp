@@ -49,4 +49,3 @@ func main() {
         Pair(b, a) -> println(b, a)
     }
 }
-

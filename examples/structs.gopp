@@ -23,4 +23,3 @@ func main() {
     var q Point
     println(q.X, q.Y)
 }
-

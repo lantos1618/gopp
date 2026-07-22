@@ -44,4 +44,3 @@ func main() {
     println(Shout(Inactive))
     println(Shout[Celsius](Celsius{Deg: 21})) // explicit instantiation
 }
-

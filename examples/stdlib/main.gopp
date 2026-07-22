@@ -34,7 +34,6 @@ func main() {
     more()
 }
 
-
 func more() {
     println(math.Sqrt(16.0))
     println(math.Floor(3.7))
@@ -72,5 +71,3 @@ func more() {
     println(n >= 0 && n < 10)
     println(rand.Float64() >= 0.0)
 }
-
-
