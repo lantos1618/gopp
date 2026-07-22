@@ -184,6 +184,12 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   real stdout and `%v` formatting (Go's builtin writes to stderr and
   prints floats as exponents).
 
+## Map literals
+
+- `map[string]int{"a": 1}`, `map[string]int{}` — keys and values are
+  checked against the declared types. (Declaration without literal —
+  `var m map[K]V` — still auto-instantiates; nil maps do not exist.)
+
 ## String interpolation
 
 - `"hi {name}!"` — `{expr}` inside a string interpolates any basic type

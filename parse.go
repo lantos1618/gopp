@@ -1077,6 +1077,38 @@ func (p *parser) parsePrimary() Expr {
 		case "comptime":
 			p.next()
 			return &ComptimeExpr{X: p.parseExpr(1), Line: tk.line, Col: tk.col}
+		case "map":
+			// map literal: map[string]int{"a": 1} (composite, keyed)
+			line := p.next().line
+			col := tk.col
+			p.expect("[")
+			k := p.parseType()
+			p.expect("]")
+			v := p.parseType()
+			if p.cur().text != "{" {
+				p.errorf(line, "map literal map[K]V needs {entries}")
+			}
+			p.next()
+			var entries []MapEntry
+			for {
+				p.skipNL()
+				if p.cur().text == "}" {
+					p.next()
+					break
+				}
+				key := p.parseExpr(1)
+				p.expect(":")
+				val := p.parseExpr(1)
+				entries = append(entries, MapEntry{Key: key, Value: val, Line: lineOf(key)})
+				p.skipNL()
+				if p.cur().text == "," {
+					p.next()
+					continue
+				}
+				p.expect("}")
+				break
+			}
+			return &MapLitExpr{K: k, V: v, Entries: entries, Line: line, Col: col}
 		case "chan":
 			line := p.next().line
 			col := tk.col

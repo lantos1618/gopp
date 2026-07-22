@@ -720,6 +720,12 @@ func (e *emitter) expr(x Expr) string {
 		}
 		e.needGopp = true
 		return "gopp.Str(" + strings.Join(parts, ", ") + ")"
+	case *MapLitExpr:
+		parts := make([]string, len(ex.Entries))
+		for i, en := range ex.Entries {
+			parts[i] = e.expr(en.Key) + ": " + e.expr(en.Value)
+		}
+		return "map[" + e.typeExprGo(ex.K) + "]" + e.typeExprGo(ex.V) + "{" + strings.Join(parts, ", ") + "}"
 	case *SliceLitExpr:
 		parts := make([]string, len(ex.Values))
 		for i, v := range ex.Values {
@@ -1105,6 +1111,19 @@ func renameExpr(x Expr, from, to string) {
 	case *SliceLitExpr:
 		for _, v := range ex.Values {
 			renameExpr(v, from, to)
+		}
+	case *StructLitExpr:
+		for _, fv := range ex.Fields {
+			renameExpr(fv.Value, from, to)
+		}
+	case *StringInterpExpr:
+		for _, pt := range ex.Parts {
+			renameExpr(pt, from, to)
+		}
+	case *MapLitExpr:
+		for _, en := range ex.Entries {
+			renameExpr(en.Key, from, to)
+			renameExpr(en.Value, from, to)
 		}
 	}
 }

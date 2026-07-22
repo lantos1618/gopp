@@ -299,3 +299,11 @@ func TestEndToEndInterp(t *testing.T) {
 		t.Fatalf("interp.gopp output:\n got %q\nwant %q", got, want)
 	}
 }
+
+func TestEndToEndMapLit(t *testing.T) {
+	got := compileAndRun(t, "examples/maplit.gopp")
+	want := "1 2\n0\n15\n3\n5\n"
+	if got != want {
+		t.Fatalf("maplit.gopp output:\n got %q\nwant %q", got, want)
+	}
+}

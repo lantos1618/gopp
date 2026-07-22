@@ -1,0 +1,10 @@
+package main
+
+// map literals: error paths.
+
+func main() {
+    m := map[string]int{"a": "b"} //~ ERROR expected int, found string
+    println(m)
+    bad := map[Nope]int{} //~ ERROR undefined type Nope
+    println(bad)
+}

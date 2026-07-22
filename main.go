@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // gopp is the go++ compiler: it compiles a single .gopp source file into a
@@ -40,7 +41,7 @@ import (
 //   - comptime functions
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp run <input.gopp> | gopp fmt [-w] <files...> | gopp lsp")
+		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp run <input.gopp> | gopp build <input.gopp> [-o binary] | gopp fmt [-w] <files...> | gopp lsp")
 		os.Exit(2)
 	}
 	if os.Args[1] == "fmt" {
@@ -56,6 +57,9 @@ func main() {
 	}
 	if os.Args[1] == "run" {
 		os.Exit(runRun(os.Args[2:]))
+	}
+	if os.Args[1] == "build" {
+		os.Exit(runBuild(os.Args[2:]))
 	}
 	in := os.Args[1]
 	outDir := "gopp-out"
@@ -156,6 +160,59 @@ func runRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "gopp:", err)
 		return 1
 	}
+	return 0
+}
+
+// runBuild compiles the input to a real binary with `go build` (no
+// module left behind). Returns the process exit code.
+func runBuild(args []string) int {
+	if len(args) != 1 && len(args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: gopp build <input.gopp> [-o binary]")
+		return 2
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		fmt.Fprintln(os.Stderr, "gopp build: go toolchain not found on PATH")
+		return 1
+	}
+	out := ""
+	if len(args) == 3 {
+		if args[1] != "-o" {
+			fmt.Fprintln(os.Stderr, "usage: gopp build <input.gopp> [-o binary]")
+			return 2
+		}
+		out = args[2]
+	} else {
+		out = strings.TrimSuffix(filepath.Base(args[0]), filepath.Ext(args[0]))
+	}
+	outDir, err := os.MkdirTemp("", "gopp-build-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gopp:", err)
+		return 1
+	}
+	defer os.RemoveAll(outDir)
+	if code := compile(args[0], outDir); code != 0 {
+		return code
+	}
+	tmpBin := filepath.Join(outDir, "bin")
+	cmd := exec.Command("go", "build", "-o", tmpBin, ".")
+	cmd.Dir = outDir
+	if out2, err := cmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "%s", out2)
+		return 1
+	}
+	// rename is cheap on the same filesystem; fall back to a copy
+	if err := os.Rename(tmpBin, out); err != nil {
+		data, rerr := os.ReadFile(tmpBin)
+		if rerr != nil {
+			fmt.Fprintln(os.Stderr, "gopp:", rerr)
+			return 1
+		}
+		if werr := os.WriteFile(out, data, 0o755); werr != nil {
+			fmt.Fprintln(os.Stderr, "gopp:", werr)
+			return 1
+		}
+	}
+	fmt.Printf("built %s -> %s\n", args[0], out)
 	return 0
 }
 

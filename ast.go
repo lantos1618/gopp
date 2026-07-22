@@ -395,6 +395,7 @@ func (*MakeChanExpr) exprNode()     {}
 func (*MatchExpr) exprNode()        {}
 func (*StructLitExpr) exprNode()    {}
 func (*StringInterpExpr) exprNode() {}
+func (*MapLitExpr) exprNode()       {}
 func (*SliceLitExpr) exprNode()     {}
 func (*TryExpr) exprNode()          {}
 func (*ComptimeExpr) exprNode()     {}
@@ -485,3 +486,18 @@ func (*SendPat) patNode()     {}
 func (*AfterPat) patNode()    {}
 func (*ClosedPat) patNode()   {}
 func (*BoolPat) patNode()     {}
+
+// MapLitExpr is a map literal: map[string]int{"a": 1}. Empty literal is
+// allowed (maps are never nil in go++ either way).
+type MapLitExpr struct {
+	K, V    TypeExpr
+	Entries []MapEntry
+	Line    int
+	Col     int
+}
+
+type MapEntry struct {
+	Key   Expr
+	Value Expr
+	Line  int
+}

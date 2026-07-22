@@ -1904,6 +1904,14 @@ func (c *checker) checkExpr(e Expr) Type {
 			}
 		}
 		ty = tstring
+	case *MapLitExpr:
+		kt := c.resolveType(ex.K)
+		vt := c.resolveType(ex.V)
+		for _, en := range ex.Entries {
+			c.checkAgainst(en.Key, kt)
+			c.checkAgainst(en.Value, vt)
+		}
+		ty = &tMap{k: kt, v: vt}
 	case *SliceLitExpr:
 		et := c.resolveType(ex.Elem)
 		if isErr(et) {
