@@ -176,7 +176,10 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   `Result[int, string]` — errors are values even across the FFI).
   `math`: Sqrt, Pow, Floor, Ceil, Abs, Min, Max. `os`: Args, Getenv,
   Exit, ReadFile, WriteFile (Result-typed failures). `time`: Sleep
-  (takes `duration` — a first-class type name), Unix, UnixMillis.
+  (takes `duration` — a first-class type name), Unix, UnixMillis,
+  Since, Add, Hours, Minutes, Seconds. `sort`: Ints, Floats, Strings,
+  IntsDesc (in place). `rand`: Intn, Float64, Shuffle. `filepath`:
+  Join, Base, Dir, Ext, Clean, IsAbs.
 - `println`/`print` are prelude helpers, not Go's builtin println:
   real stdout and `%v` formatting (Go's builtin writes to stderr and
   prints floats as exponents).
