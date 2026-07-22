@@ -184,6 +184,13 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   real stdout and `%v` formatting (Go's builtin writes to stderr and
   prints floats as exponents).
 
+## Slice literals
+
+- `[]int{1, 2, 3}`, `[]int{}` — element values are checked against the
+  element type with the usual literal adoption; empty literals are
+  typed by the declared element. Nesting works (`[][]int{[]int{1}}`),
+  as does generic inference through literals. Not comptime expressions.
+
 ## Scopes & names (§3)
 
 - Shadowing: allowed across scopes; `:=` redeclaration within the same
