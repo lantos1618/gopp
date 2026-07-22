@@ -51,7 +51,7 @@ generic constructor inference (`var r Result[int, string] = Ok(1)`,
 |---|------|--------|
 | 14 | operator overloading | ⚠️ arith/comparison/unary core ✅; no compound-assign/index/shift overloads |
 | 17 | identifier interning | ❌ deferred (perf-only at this size) |
-| 28 | LSP | ⚠️ v1: diagnostics/hover/definition/completion/symbols; single-file, no local-var defs |
+| 28 | LSP | ⚠️ v2: + local-var defs, import-aware analysis, qualified completion; no dirty-buffer deps |
 | 29 | spec decisions written down | ✅ SPEC.md |
 
 ## Meta-knowledge checklist (theory landmines)
@@ -77,8 +77,8 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
    ~~compound assign (+ sema leak fix)~~ ✅
 3. ~~default method bodies (§23-lite)~~ ✅
 4. ~~indexing overloads (`index`/`set` methods)~~ ✅
-5. **LSP v2**; **§17 interning**. Cross-package impls: DECLINED (Go
-   methods must live in the type's package — SPEC.md).
+5. ~~LSP v2~~ ✅; **§17 interning** next optional; cross-package
+   impls: DECLINED (Go methods must live in the type's package — SPEC.md).
 3. **§17 interning + §1 integer IDs** — when compile times or LSP make
    them pay; both are wrappers, not rewrites, by design.
 4. **LSP v2** — import-aware analysis, local-var definitions, column

@@ -348,9 +348,11 @@ drop order) do not apply and are deliberately deleted from the roadmap.
 - **§19 glob imports, §25 effects** — no syntax for them.
 - **§27 incremental** — the pass architecture and side tables were built
   so queries wrap around, not rewrite in. Later.
-- **§28 LSP** — v1 landed (`gopp lsp`): diagnostics, hover, definition,
-  completion, document symbols. Single-file analysis; local-var
-  definitions and import-aware analysis are the known gaps.
+- **§28 LSP** — v2 (`gopp lsp`): diagnostics, hover, definition
+  (top-level AND locals — nearest-preceding decl site, block scopes
+  approximated), completion (incl. qualified `foo.` offers),
+  document symbols, import-aware analysis (on-disk deps wired into
+  buffer checking). Gaps: dirty-buffer deps, cross-file hover.
 
 ## Testing (§12)
 
