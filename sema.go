@@ -66,7 +66,7 @@ func (t *tMap) String() string { return "map<" + t.k.String() + ", " + t.v.Strin
 
 type tChan struct{ elem Type }
 
-func (t *tChan) String() string { return "chan " + t.elem.String() }
+func (t *tChan) String() string { return "chan<" + t.elem.String() + ">" }
 
 type tSlice struct{ elem Type }
 

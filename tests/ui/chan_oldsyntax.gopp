@@ -1,0 +1,10 @@
+package main
+
+// Go-style chan[T] is gone: the parser points at the new chan<T> form.
+
+func main() {
+    var ch chan[int] //~ ERROR chan types are written chan<T> (e.g. chan<int>)
+    println(ch)
+    c2 := chan[int](1) //~ ERROR chan types are written chan<T> (e.g. chan<int>)
+    println(c2)
+}

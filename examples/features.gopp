@@ -47,7 +47,7 @@ func main() {
     }
 
     // expression-select: recv arm body type comes from the channel
-    ch := chan[int](1)
+    ch := chan<int>(1)
     ch.send(42)
     got := match {
         v := ch.recv() -> v
@@ -76,7 +76,7 @@ func main() {
     }
 
     // after() fires when nothing is sent
-    empty := chan[int]()
+    empty := chan<int>()
     match {
         v := empty.recv() -> println(v)
         after(10 * ms) -> println("timeout")

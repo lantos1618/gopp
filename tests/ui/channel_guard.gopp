@@ -1,6 +1,6 @@
 package main
 func main() {
-    ch := chan[int](1)
+    ch := chan<int>(1)
     match {
     v := ch.recv() if v > 0 -> println(v) //~ ERROR guards on channel arms
     }

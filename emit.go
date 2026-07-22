@@ -13,7 +13,7 @@ import (
 //   - enum          -> tagged struct + iota tags + constructor funcs
 //   - match subject -> if/else chain on the tag (IIFE in value position)
 //   - match channels-> select
-//   - chan[T](cap)  -> make(chan T, cap); .send/.recv/.close -> <- / close
+//   - chan<T>(cap)  -> make(chan T, cap); .send/.recv/.close -> <- / close
 //   - var m map<K, V> -> make(...) (maps are never nil in go++)
 //   - loop { }      -> labeled for; break loop -> break label
 

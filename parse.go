@@ -82,10 +82,10 @@ func (p *parser) expect(text string) {
 	p.next()
 }
 
-// expectGT consumes the `>` closing a map<K, V> type. The lexer glues two
-// nested closers into one `>>` operator token (ops2 in lex.go), so a type
-// like map<int, map<int, bool>> ends in a single token: split it in place,
-// leaving a ">" for the enclosing parseType to consume.
+// expectGT consumes the `>` closing a map<K, V> or chan<T> type. The lexer
+// glues two nested closers into one `>>` operator token (ops2 in lex.go), so
+// a type like map<int, map<int, bool>> ends in a single token: split it in
+// place, leaving a ">" for the enclosing parseType to consume.
 func (p *parser) expectGT() {
 	if p.cur().text == ">>" {
 		p.toks[p.pos].text = ">"
@@ -501,9 +501,12 @@ func (p *parser) parseType() TypeExpr {
 		return &MapType{K: k, V: v, Line: line, Col: col}
 	case "chan":
 		p.next()
-		p.expect("[")
+		if p.cur().text == "[" {
+			p.errorft(p.cur(), "chan types are written chan<T> (e.g. chan<int>)")
+		}
+		p.expect("<")
 		e := p.parseType()
-		p.expect("]")
+		p.expectGT()
 		return &ChanType{Elem: e, Line: line, Col: col}
 	case "[":
 		p.next()
@@ -1143,11 +1146,14 @@ func (p *parser) parsePrimary() Expr {
 		case "chan":
 			line := p.next().line
 			col := tk.col
-			p.expect("[")
+			if p.cur().text == "[" {
+				p.errorft(p.cur(), "chan types are written chan<T> (e.g. chan<int>)")
+			}
+			p.expect("<")
 			elem := p.parseType()
-			p.expect("]")
+			p.expectGT()
 			if p.cur().text != "(" {
-				p.errorf(line, "chan[T] needs (cap) in expression position")
+				p.errorf(line, "chan<T> needs (cap) in expression position")
 			}
 			p.next()
 			var capE Expr

@@ -314,7 +314,7 @@ type IndexExpr struct {
 	Col   int
 }
 
-// MakeChanExpr is `chan[T](cap)` / `chan[T]()` in expression position.
+// MakeChanExpr is `chan<T>(cap)` / `chan<T>()` in expression position.
 type MakeChanExpr struct {
 	Elem TypeExpr
 	Cap  Expr // nil = unbuffered

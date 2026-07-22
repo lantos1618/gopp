@@ -1,0 +1,19 @@
+package main
+
+// chan<T> type syntax: params, vars, nesting, and the constructor.
+
+func send(ch chan<int>, v int) {
+    ch.send(v)
+}
+
+func main() {
+    ch := chan<int>(2)
+    send(ch, 1)
+    var out chan<int>
+    out = ch
+    nested := chan<chan<int>>(1)
+    nested.send(chan<int>(1))
+    var m map<string, chan<int>>
+    m["a"] = out
+    println(m["a"].recv(), nested.recv().recv())
+}
