@@ -1,21 +1,24 @@
 package main
 
-// lsp.go — go++ language server v1 (§28): LSP over stdio, stdlib only.
+// lsp.go — go++ language server v2 (§28): LSP over stdio, stdlib only.
 // One goroutine, sequential message processing; each didOpen/didChange
 // re-runs the real pipeline (lex -> parse -> checkImports) on the
-// in-memory text and publishes the full diagnostic set. v1 analyzes each
-// buffer in single-file mode: if the buffer's directory has imports they
-// are ignored (the imported qualifier will diagnose as unknown).
+// in-memory text and publishes the full diagnostic set. Buffers with
+// imports are checked import-aware: dependency packages are loaded from
+// the buffer's on-disk directory (current even when the buffer isn't
+// saved) and their checkers wired in by qualifier; anything missing
+// degrades to single-file mode (the qualifier diagnoses as undefined).
 //
-// Position logic is line-based because AST nodes carry Line only; when
-// the parallel column branch lands, identAt/hover/definition can refine
-// matches by column without protocol changes.
+// Position logic is line-based where the AST still lacks columns;
+// identAt/hover/definition refine by column where nodes carry Col.
 
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -326,10 +329,10 @@ func (s *lspServer) doc(uri string) *lspDoc { return s.docs[uri] }
 // ---------- analysis ----------
 
 // openDoc (re)analyzes text and publishes the resulting diagnostics.
-// The pipeline is the compiler's own: lex -> parse -> checkImports in
-// single-file mode (imports nil — see file header). Like the CLI, sema
-// is skipped when syntax errors exist; stale check tables are dropped
-// too so hover/definition never answer from an out-of-date AST.
+// The pipeline is the compiler's own: lex -> parse -> checkImports with
+// the buffer's imports wired in (depCheckers). Like the CLI, sema is
+// skipped when syntax errors exist; stale check tables are dropped too
+// so hover/definition never answer from an out-of-date AST.
 func (s *lspServer) openDoc(uri, text string) {
 	d := &lspDoc{text: text, lines: strings.Split(text, "\n")}
 	diags := &Diagnostics{}
@@ -341,13 +344,42 @@ func (s *lspServer) openDoc(uri, text string) {
 		diags.items = append(diags.items, pdiags.items...)
 		d.f = f
 		if !diags.HasErrors() {
-			chk, cdiags := checkImports(f, nil, nil, checkOpts{src: text})
+			chk, cdiags := checkImports(f, depCheckers(uri, f), nil, checkOpts{src: text})
 			diags.items = append(diags.items, cdiags.items...)
 			d.chk = chk
 		}
 	}
 	s.docs[uri] = d
 	s.publishDiags(uri, diags.sorted())
+}
+
+// depCheckers loads the buffer's imports from its on-disk directory and
+// returns qualifier -> checked dependency, exactly like checkGraph wires
+// them (dep.name). Deps are read from disk, so they're current even when
+// the edited buffer isn't saved; any failure (no file URI, missing
+// directory, broken dep) simply omits that import, degrading to
+// single-file mode where the qualifier diagnoses as undefined.
+func depCheckers(uri string, f *File) map[string]*checker {
+	imports := map[string]*checker{}
+	if len(f.Imports) == 0 {
+		return imports
+	}
+	path, ok := strings.CutPrefix(uri, "file://")
+	if !ok || path == "" {
+		return imports
+	}
+	dir := filepath.Dir(path)
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return imports
+	}
+	for _, imp := range f.Imports {
+		dep := loadGraph(filepath.Join(dir, filepath.FromSlash(imp.Path)))
+		checkGraph(dep)
+		if dep.chk != nil && dep.name != "" {
+			imports[dep.name] = dep.chk
+		}
+	}
+	return imports
 }
 
 func (s *lspServer) publishDiags(uri string, ds []Diagnostic) {
@@ -380,6 +412,12 @@ func (s *lspServer) publishDiags(uri string, ds []Diagnostic) {
 
 // ---------- position helpers ----------
 
+// isIdentByte reports whether c continues a go++ identifier.
+func isIdentByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+		c >= '0' && c <= '9' || c == '_'
+}
+
 // identAt extracts the identifier surrounding pos in the document text.
 func (d *lspDoc) identAt(pos lspPosition) (string, bool) {
 	if pos.Line < 0 || pos.Line >= len(d.lines) {
@@ -390,16 +428,12 @@ func (d *lspDoc) identAt(pos lspPosition) (string, bool) {
 	if col > len(line) {
 		col = len(line)
 	}
-	isIdent := func(c byte) bool {
-		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
-			c >= '0' && c <= '9' || c == '_'
-	}
 	start := col
-	for start > 0 && isIdent(line[start-1]) {
+	for start > 0 && isIdentByte(line[start-1]) {
 		start--
 	}
 	end := col
-	for end < len(line) && isIdent(line[end]) {
+	for end < len(line) && isIdentByte(line[end]) {
 		end++
 	}
 	if start == end {
@@ -408,15 +442,26 @@ func (d *lspDoc) identAt(pos lspPosition) (string, bool) {
 	return line[start:end], true
 }
 
-// colOf finds name in the given 1-based source line, returning a 0-based
-// column (0 when absent). Lets hover/definition point at the name even
-// though AST nodes carry no Col yet.
+// colOf finds the first whole-word occurrence of name in the given
+// 1-based source line, returning a 0-based column (0 when absent).
+// Lets hover/definition point at the name where nodes carry no Col.
 func (d *lspDoc) colOf(line1 int, name string) int {
 	if line1 < 1 || line1 > len(d.lines) {
 		return 0
 	}
-	if i := strings.Index(d.lines[line1-1], name); i >= 0 {
-		return i
+	line := d.lines[line1-1]
+	for i := 0; i+len(name) <= len(line); i++ {
+		j := strings.Index(line[i:], name)
+		if j < 0 {
+			break
+		}
+		j += i
+		before := j == 0 || !isIdentByte(line[j-1])
+		after := j+len(name) == len(line) || !isIdentByte(line[j+len(name)])
+		if before && after {
+			return j
+		}
+		i = j + 1
 	}
 	return 0
 }
@@ -465,7 +510,7 @@ func (s *lspServer) onHover(req *lspRequest) {
 			if ct, ok := d.chk.resolved[id]; ok {
 				text = ct.enum.Name + " variant " + ct.variant.Name
 			} else if t, ok := d.chk.types[id]; ok && !isErr(t) {
-				text = name + ": " + t.String()
+				text = name + ": " + d.typeString(t)
 			}
 		}
 	}
@@ -477,6 +522,24 @@ func (s *lspServer) onHover(req *lspRequest) {
 		return
 	}
 	s.reply(req.ID, &hoverResult{Contents: markupContent{Kind: "markdown", Value: "```gopp\n" + text + "\n```"}})
+}
+
+// typeString renders a hover type, qualifying foreign enum/struct decls
+// with their package qualifier (geom.Point).
+func (d *lspDoc) typeString(t Type) string {
+	var decl Decl
+	switch ty := t.(type) {
+	case *tStruct:
+		decl = ty.decl
+	case *tEnum:
+		decl = ty.decl
+	}
+	if decl != nil {
+		if qual, ok := d.chk.declPkg[decl]; ok {
+			return qual + "." + t.String()
+		}
+	}
+	return t.String()
 }
 
 // declHover renders the declaration named name on line1 (func signature,
@@ -538,10 +601,23 @@ func (s *lspServer) onDefinition(req *lspRequest) {
 		s.reply(req.ID, nil)
 		return
 	}
-	// Top-level decls and variant ctors only. Local variables and
-	// parameters are a known v1 gap: the checker's scopes are gone after
-	// checking and it keeps no name->decl table, so a post-hoc lookup
-	// cannot resolve shadowing correctly.
+	// Locals first: the nearest preceding declaration site with the same
+	// name inside the enclosing function (sema.go declSites); fall back
+	// to top-level decls and variant ctors.
+	if d.chk != nil {
+		if site, ok := d.localDef(name, p.Position); ok {
+			col := site.col - 1
+			if site.col <= 0 { // site has no column: scan the line text
+				col = d.colOf(site.line, name)
+			}
+			rng := lspRange{
+				Start: lspPosition{site.line - 1, col},
+				End:   lspPosition{site.line - 1, col + len(name)},
+			}
+			s.reply(req.ID, []lspLocation{{URI: p.TextDocument.URI, Range: rng}})
+			return
+		}
+	}
 	line1 := 0
 	for _, decl := range d.f.Decls {
 		switch dt := decl.(type) {
@@ -576,6 +652,64 @@ func (s *lspServer) onDefinition(req *lspRequest) {
 	s.reply(req.ID, []lspLocation{{URI: p.TextDocument.URI, Range: rng}})
 }
 
+// localDef resolves name at pos to its nearest preceding declaration
+// site within the enclosing function. Approximation: the enclosing
+// function is the nearest function-like decl at or above the cursor,
+// and "nearest preceding wins" — block scopes are not modeled, so a
+// name declared in a sibling branch could resolve to a site that isn't
+// actually in scope at the cursor. In practice the common cases
+// (params, :=, var, match bindings, receivers) resolve exactly, and
+// shadowing picks the innermost declaration that precedes the use.
+func (d *lspDoc) localDef(name string, pos lspPosition) (declSite, bool) {
+	line1 := pos.Line + 1
+	col1 := pos.Character + 1
+	lower := d.enclosingDeclLine(line1)
+	best := declSite{}
+	found := false
+	for _, ds := range d.chk.declSites {
+		if ds.name != name || ds.line < lower || ds.line > line1 {
+			continue
+		}
+		if ds.line == line1 && ds.col > col1 {
+			continue // declared later on the same line (col 0 = unknown: allow)
+		}
+		if !found || ds.line > best.line || (ds.line == best.line && ds.col > best.col) {
+			best, found = ds, true
+		}
+	}
+	return best, found
+}
+
+// enclosingDeclLine returns the declaration line of the nearest
+// function-like decl (func, impl method, behavior default body) at or
+// above line1 — the lower bound for local definition lookup, so a local
+// in one function never resolves into another.
+func (d *lspDoc) enclosingDeclLine(line1 int) int {
+	best := 0
+	take := func(l int) {
+		if l > 0 && l <= line1 && l > best {
+			best = l
+		}
+	}
+	for _, decl := range d.f.Decls {
+		switch dt := decl.(type) {
+		case *FuncDecl:
+			take(dt.Line)
+		case *ImplDecl:
+			for _, m := range dt.Methods {
+				take(m.Line)
+			}
+		case *BehaviorDecl:
+			for _, m := range dt.Methods {
+				if m.Body != nil {
+					take(m.Line)
+				}
+			}
+		}
+	}
+	return best
+}
+
 var lspKeywords = []string{
 	"func", "enum", "type", "match", "loop", "for", "if", "else",
 	"return", "break", "comptime", "import", "chan", "map",
@@ -590,6 +724,14 @@ func (s *lspServer) onCompletion(req *lspRequest) {
 		return
 	}
 	d := s.doc(p.TextDocument.URI)
+	// After a typed qualifier (foo.), offer only that package's exported
+	// symbols — the imported checker's funcs/types/ctors.
+	if d != nil && d.chk != nil {
+		if dep, ok := d.qualifierAt(p.Position); ok {
+			s.reply(req.ID, qualifiedItems(dep))
+			return
+		}
+	}
 	items := make([]completionItem, 0, len(lspKeywords)+len(lspPrelude))
 	for _, k := range lspKeywords {
 		items = append(items, completionItem{Label: k, Kind: kindKeyword})
@@ -621,6 +763,86 @@ func (s *lspServer) onCompletion(req *lspRequest) {
 		}
 	}
 	s.reply(req.ID, items)
+}
+
+// qualifierAt reports whether the cursor sits after `qual.` and returns
+// the imported package's checker for that qualifier. Whole-line
+// heuristic: scan back over the partial member name, a dot, then the
+// qualifier identifier.
+func (d *lspDoc) qualifierAt(pos lspPosition) (*checker, bool) {
+	if pos.Line < 0 || pos.Line >= len(d.lines) {
+		return nil, false
+	}
+	line := d.lines[pos.Line]
+	i := pos.Character
+	if i > len(line) {
+		i = len(line)
+	}
+	isIdent := isIdentByte
+	j := i
+	for j > 0 && isIdent(line[j-1]) {
+		j--
+	}
+	if j == 0 || line[j-1] != '.' {
+		return nil, false
+	}
+	k := j - 1
+	for k > 0 && isIdent(line[k-1]) {
+		k--
+	}
+	if k == j-1 {
+		return nil, false // dot with no qualifier before it
+	}
+	dep, ok := d.chk.imports[line[k:j-1]]
+	return dep, ok
+}
+
+// qualifiedItems lists a dependency's exported symbols (§3: capitalized
+// = exported): funcs, enums/structs, and variant ctors. Prelude types
+// (Result/Option) are skipped — they're not members of the package.
+func qualifiedItems(dep *checker) []completionItem {
+	items := []completionItem{}
+	funcs := make([]string, 0, len(dep.funcs))
+	for n := range dep.funcs {
+		if exported(n) {
+			funcs = append(funcs, n)
+		}
+	}
+	sort.Strings(funcs)
+	for _, n := range funcs {
+		items = append(items, completionItem{Label: n, Kind: kindFunction, Detail: dep.funcs[n].String()})
+	}
+	types := make([]string, 0, len(dep.enums)+len(dep.structs))
+	for n, e := range dep.enums {
+		if exported(n) && !dep.prelude[e] {
+			types = append(types, n)
+		}
+	}
+	for n := range dep.structs {
+		if exported(n) {
+			types = append(types, n)
+		}
+	}
+	sort.Strings(types)
+	for _, n := range types {
+		kind := kindEnum
+		detail := "enum"
+		if _, isStruct := dep.structs[n]; isStruct {
+			kind, detail = kindClass, "struct"
+		}
+		items = append(items, completionItem{Label: n, Kind: kind, Detail: detail})
+	}
+	ctors := make([]string, 0, len(dep.ctors))
+	for n, ct := range dep.ctors {
+		if exported(n) && !dep.prelude[ct.enum] {
+			ctors = append(ctors, n)
+		}
+	}
+	sort.Strings(ctors)
+	for _, n := range ctors {
+		items = append(items, completionItem{Label: n, Kind: kindEnumMember, Detail: dep.ctors[n].enum.Name + " variant"})
+	}
+	return items
 }
 
 func (s *lspServer) onDocumentSymbol(req *lspRequest) {
@@ -679,6 +901,14 @@ func (w *astWalk) decl(d Decl) {
 	switch dt := d.(type) {
 	case *FuncDecl:
 		w.block(dt.Body)
+	case *ImplDecl:
+		for _, m := range dt.Methods {
+			w.block(m.Body)
+		}
+	case *BehaviorDecl:
+		for _, m := range dt.Methods {
+			w.block(m.Body) // default method bodies (§23-lite)
+		}
 	case *ComptimeDecl:
 		w.block(dt.Body)
 	}

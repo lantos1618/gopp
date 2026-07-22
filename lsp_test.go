@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -393,5 +395,197 @@ func TestLSPNoCrashBeforeInit(t *testing.T) {
 	m := byID(t, msgs, 1)
 	if m.Error != nil {
 		t.Fatalf("pre-init hover: %+v", m.Error)
+	}
+}
+
+// ---------- v2: local definitions, imports, qualified completion ----------
+
+func TestLSPDefinitionLocalVar(t *testing.T) {
+	src := `package main
+
+enum Shape {
+    Circle(r int)
+    Square
+}
+
+func area(s Shape) int {
+    x := 2
+    return match s {
+        Circle(r) -> r + x
+        Square -> 0
+    }
+}
+`
+	// 0-based lines: func (param s) on 7, x := on 8, Circle arm on 10.
+	lineOf := func(sub string) int {
+		for i, l := range strings.Split(src, "\n") {
+			if strings.Contains(l, sub) {
+				return i
+			}
+		}
+		return -1
+	}
+	msgs := runLSP(t, initReq(1), didOpen(src),
+		// `s` in the match subject -> the parameter on the func line
+		posReq(2, "textDocument/definition", lineOf("return match s {"), strings.Index("    return match s {", "s")),
+		// `x` in the arm -> the := on the line above
+		posReq(3, "textDocument/definition", lineOf("Circle(r) -> r + x"), strings.Index("        Circle(r) -> r + x", "x")),
+		// `r` after -> -> the variant binding on the same line
+		posReq(4, "textDocument/definition", lineOf("Circle(r) -> r + x"), strings.Index("        Circle(r) -> r + x", " -> r")+4),
+		note("exit", nil))
+
+	want := map[int]int{2: 7, 3: 8, 4: 10}
+	for id, line := range want {
+		m := byID(t, msgs, id)
+		var locs []lspLocation
+		if err := json.Unmarshal(m.Result, &locs); err != nil {
+			t.Fatalf("definition %d: %v", id, err)
+		}
+		if len(locs) != 1 || locs[0].Range.Start.Line != line {
+			t.Fatalf("definition %d: want line %d, got %+v", id, line, locs)
+		}
+	}
+	// the binding's column should point at the r inside Circle(r), not
+	// at some other r on the line
+	m := byID(t, msgs, 4)
+	var locs []lspLocation
+	json.Unmarshal(m.Result, &locs)
+	if locs[0].Range.Start.Character != strings.Index("        Circle(r) -> r + x", "(r")+1 {
+		t.Fatalf("binding column off: %+v", locs[0])
+	}
+}
+
+// writeGeomFixture creates tmp/geom/geom.gopp and returns tmp.
+func writeGeomFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	geom := `package geom
+
+type Point struct {
+    X int
+    Y int
+}
+
+func NewPoint(x int, y int) Point {
+    return Point{X: x, Y: y}
+}
+
+func hidden() {
+}
+`
+	if err := os.MkdirAll(filepath.Join(dir, "geom"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "geom", "geom.gopp"), []byte(geom), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+const lspImportSrc = `package main
+
+import "geom"
+
+func main() {
+    var p geom.Point = geom.NewPoint(1, 2)
+    println(p.X)
+}
+`
+
+func fileURI(dir string) string { return "file://" + filepath.ToSlash(dir) + "/main.gopp" }
+
+func didOpenURI(uri, src string) string {
+	return note("textDocument/didOpen", map[string]any{
+		"textDocument": map[string]any{
+			"uri": uri, "languageId": "gopp", "version": 1, "text": src,
+		},
+	})
+}
+
+func posReqURI(id int, method, uri string, line, char int) string {
+	return req(id, method, map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     map[string]any{"line": line, "character": char},
+	})
+}
+
+func TestLSPImportAware(t *testing.T) {
+	uri := fileURI(writeGeomFixture(t))
+	msgs := runLSP(t, initReq(1), didOpenURI(uri, lspImportSrc),
+		posReqURI(2, "textDocument/hover", uri, 6, 13), // `p` in println(p.X)
+		note("exit", nil))
+
+	// import-aware analysis: no spurious "undefined package geom"
+	m := byMethod(t, msgs, "textDocument/publishDiagnostics")
+	var dp struct {
+		Diagnostics []lspDiagnostic `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(m.Params, &dp); err != nil {
+		t.Fatalf("diagnostics params: %v", err)
+	}
+	if len(dp.Diagnostics) != 0 {
+		t.Fatalf("want clean diagnostics, got %+v", dp.Diagnostics)
+	}
+
+	// hover over p shows the qualified struct type
+	h := byID(t, msgs, 2)
+	var hv hoverResult
+	if err := json.Unmarshal(h.Result, &hv); err != nil {
+		t.Fatalf("hover result: %v", err)
+	}
+	if !strings.Contains(hv.Contents.Value, "p: geom.Point") {
+		t.Fatalf("hover should show p: geom.Point, got %q", hv.Contents.Value)
+	}
+}
+
+func TestLSPImportMissingDirDegrades(t *testing.T) {
+	// same source, but no geom package on disk: the qualifier must
+	// diagnose as undefined instead of crashing the analysis
+	uri := fileURI(t.TempDir())
+	msgs := runLSP(t, initReq(1), didOpenURI(uri, lspImportSrc), note("exit", nil))
+	m := byMethod(t, msgs, "textDocument/publishDiagnostics")
+	var dp struct {
+		Diagnostics []lspDiagnostic `json:"diagnostics"`
+	}
+	json.Unmarshal(m.Params, &dp)
+	found := false
+	for _, d := range dp.Diagnostics {
+		if strings.Contains(d.Message, "undefined package geom") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want undefined-package diagnostic, got %+v", dp.Diagnostics)
+	}
+}
+
+func TestLSPQualifiedCompletion(t *testing.T) {
+	uri := fileURI(writeGeomFixture(t))
+	// cursor right after `geom.` on the usage line (0-based line 5)
+	col := strings.Index("    var p geom.Point = geom.NewPoint(1, 2)", "geom.") + len("geom.")
+	msgs := runLSP(t, initReq(1), didOpenURI(uri, lspImportSrc),
+		posReqURI(2, "textDocument/completion", uri, 5, col),
+		note("exit", nil))
+	m := byID(t, msgs, 2)
+	var items []completionItem
+	if err := json.Unmarshal(m.Result, &items); err != nil {
+		t.Fatalf("completion result: %v", err)
+	}
+	have := map[string]int{}
+	for _, it := range items {
+		have[it.Label] = it.Kind
+	}
+	if have["NewPoint"] != kindFunction {
+		t.Fatalf("want NewPoint as function, got %+v", items)
+	}
+	if have["Point"] != kindClass {
+		t.Fatalf("want Point as struct, got %+v", items)
+	}
+	if _, ok := have["hidden"]; ok {
+		t.Fatalf("unexported dep symbol must not complete: %+v", items)
+	}
+	// qualified completion replaces the general list: no keywords
+	if _, ok := have["func"]; ok {
+		t.Fatalf("qualified completion should not include keywords: %+v", items)
 	}
 }

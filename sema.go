@@ -299,6 +299,30 @@ type checker struct {
 	declPkg     map[Decl]string   // foreign enum/struct decl -> owning package qualifier
 	src         string            // package source (for comptime .body text)
 	allowNative bool              // stdlib: `= native` declarations permitted
+	// declSites records every local variable declaration site (§28: the
+	// LSP's go-to-definition — scopes are gone after checking, so a
+	// post-hoc lookup needs a table): := declarations, var statements,
+	// function params, match pattern bindings, impl/behavior receivers
+	// and method params. Col is 0 where the AST has no column for the
+	// name itself (params, var statements, variant bindings); consumers
+	// scan the line text instead.
+	declSites []declSite
+}
+
+// declSite is one local variable declaration: name plus 1-based
+// line/col (col 0 = not attached to a column).
+type declSite struct {
+	name      string
+	line, col int
+}
+
+// recordDecl appends a declaration site; the blank identifier is not a
+// definition target.
+func (c *checker) recordDecl(name string, line, col int) {
+	if name == "" || name == "_" {
+		return
+	}
+	c.declSites = append(c.declSites, declSite{name, line, col})
 }
 
 func preludeEnums() []*EnumDecl {
@@ -531,6 +555,7 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			for i, p := range fn.Params {
 				if i < len(ft.params) {
 					c.cur.vars[p.Name] = ft.params[i]
+					c.recordDecl(p.Name, p.Line, 0)
 				}
 			}
 			c.checkStmts(fn.Body.List)
@@ -571,9 +596,11 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			c.curFuncLine = m.Line
 			c.cur = &scope{parent: c.globals, vars: map[string]Type{}}
 			c.cur.vars[recvName(m)] = rt // the receiver
+			c.recordDecl(recvName(m), m.Line, 0)
 			for i, p := range m.Params[1:] {
 				if i < len(ft.params) {
 					c.cur.vars[p.Name] = ft.params[i]
+					c.recordDecl(p.Name, p.Line, 0)
 				}
 			}
 			c.checkStmts(m.Body.List)
@@ -602,9 +629,11 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			c.curBounds = map[string]string{"Self": b.Name}
 			c.cur = &scope{parent: c.globals, vars: map[string]Type{}}
 			c.cur.vars[recvNameFields(m.Params)] = tTypeParam{"Self"}
+			c.recordDecl(recvNameFields(m.Params), m.Line, 0)
 			for i, p := range m.Params[1:] {
 				if i < len(ft.params) {
 					c.cur.vars[p.Name] = ft.params[i]
+					c.recordDecl(p.Name, p.Line, 0)
 				}
 			}
 			c.checkStmts(m.Body.List)
@@ -1234,6 +1263,7 @@ func (c *checker) declareShort(id *Ident, t Type) {
 		}
 	}
 	c.cur.vars[id.Name] = t
+	c.recordDecl(id.Name, id.Line, id.Col)
 	if c.cur.lines == nil {
 		c.cur.lines = map[string]int{}
 	}
@@ -1259,6 +1289,7 @@ func (c *checker) checkStmt(s Stmt) {
 			}
 		}
 		c.cur.vars[st.Name] = ty
+		c.recordDecl(st.Name, st.Line, 0)
 	case *AssignStmt:
 		if len(st.Lhs) != len(st.Rhs) {
 			c.diag.errorfAt(st.Line, st.Col, "assignment mismatch: %d left, %d right", len(st.Lhs), len(st.Rhs))
@@ -2819,6 +2850,7 @@ func (c *checker) checkMatchSubject(ex *MatchExpr, want Type) Type {
 					for k, bd := range p.Bindings {
 						if bd != "_" && k < len(v.Fields) {
 							c.cur.vars[bd] = c.fieldType(en, v, k)
+							c.recordDecl(bd, p.Line, 0)
 						}
 					}
 				}
@@ -2846,6 +2878,7 @@ func (c *checker) checkMatchSubject(ex *MatchExpr, want Type) Type {
 					hasWild = true
 				}
 				c.cur.vars[p.Name] = st
+				c.recordDecl(p.Name, p.Line, p.Col)
 			}
 		case *LiteralPat:
 			lt := c.checkExpr(p.X)
