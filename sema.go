@@ -544,6 +544,9 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			})
 		}
 	}
+	// §4: same rule for enums — a variant that contains its own enum by
+	// value is infinite-size (ASTs must use *Expr-style indirection)
+	c.checkEnumCycles(f)
 	// §PONY: actors — after types, before signatures
 	c.registerActors(f)
 	// §8: behaviors and impls — after types, before signatures (bounds
@@ -1321,7 +1324,58 @@ func (c *checker) sigMatches(got, want *tFunc, self Type) bool {
 	return true
 }
 
-// checkStructCycles: DFS over direct (unboxed) struct fields; a cycle
+// checkEnumCycles detects enums that contain themselves by value (the
+// emission is a struct of inline variant fields, so a by-value cycle is
+// infinite-size). Indirection via *T/map/slice/chan breaks the cycle;
+// cycles through structs are followed too.
+func (c *checker) checkEnumCycles(f *File) {
+	done := map[*EnumDecl]bool{}
+	var names []string
+	for n := range c.enums {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		e := c.enums[n]
+		if c.prelude[e] || done[e] {
+			continue
+		}
+		c.enumCycle(e, e, map[*EnumDecl]bool{}, done)
+	}
+}
+
+func (c *checker) enumCycle(root, cur *EnumDecl, visiting map[*EnumDecl]bool, done map[*EnumDecl]bool) {
+	if visiting[cur] {
+		c.diag.errorf(root.Line, "recursive type has infinite size: %s contains itself (insert indirection, e.g. *%s)", root.Name, cur.Name)
+		for e := range visiting {
+			done[e] = true
+		}
+		return
+	}
+	visiting[cur] = true
+	defer delete(visiting, cur)
+	var walk func(ty Type)
+	walk = func(ty Type) {
+		switch t := ty.(type) {
+		case *tEnum:
+			if c.declPkg[t.decl] == "" {
+				c.enumCycle(root, t.decl, visiting, done)
+			}
+		case *tStruct:
+			if c.declPkg[t.decl] == "" {
+				for i := range t.decl.Fields {
+					walk(c.structFieldType(t, &t.decl.Fields[i]))
+				}
+			}
+		}
+	}
+	for _, v := range cur.Variants {
+		for _, fld := range v.Fields {
+			walk(c.resolveTypeIn(fld.Type, cur))
+		}
+	}
+}
+
 // means infinite size. Indirection through *T/map/slice/chan breaks it.
 func (c *checker) checkStructCycles(root, cur *StructDecl, visiting map[*StructDecl]bool) {
 	if visiting[cur] {
