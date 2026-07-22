@@ -462,6 +462,15 @@ drop order) do not apply and are deliberately deleted from the roadmap.
 - v1 limits: no behavior-to-behavior calls, mailbox cap is fixed (32),
   reply via channels only.
 
+## Multiple results
+
+- `func f() (int, string) { return 1, "a" }` — Go-style. `a, b := f()`
+  and `a, b = f()` distribute positionally (`_` skips a position);
+  `return g()` spreads when the result lists align.
+- A multi-result call in single-value context is an error:
+  "multiple-value f() in single-value context". Expression-statements
+  and `defer` may discard.
+
 ## gopp test
 
 - `*_test.gopp` files are skipped by normal builds and compiled only

@@ -1,0 +1,1075 @@
+package main
+
+// goparse — the go++ parser, written in go++. Self-hosting milestone 2:
+// go++ source in, AST out (dumped for verification). Recursive descent
+// with precedence climbing, ported from the compiler's parse.go.
+
+import "str"
+import "os"
+
+// ---------- AST ----------
+
+enum Expr {
+    ENil
+    ENum(s string)
+    EStr(s string)
+    ERune(s string)
+    EIdent(name string)
+    EBinary(op string, x Expr, y Expr)
+    EUnary(op string, x Expr)
+    ECall(f Expr, args [Expr])
+    ESelector(x Expr, sel string)
+    EIndex(x Expr, idx [Expr])
+    ESlice(x Expr, lo Expr, hi Expr)
+    ESliceLit(elem string, vals [Expr])
+    EMapLit(ktype string, vtype string, keys [Expr], vals [Expr])
+    EStructLit(tname string, names [string], vals [Expr])
+    EMatch(subj Expr, arms [Arm])
+    ETry(x Expr)
+}
+
+type Arm struct {
+    Pat   string
+    Expr  Expr    // ENil when the arm is a block
+    Stmts [Stmt]
+}
+
+enum Stmt {
+    SNil
+    SVar(name string, tname string, init Expr)
+    SAssign(lhs [Expr], op string, rhs [Expr])
+    SExprStmt(x Expr)
+    SIf(cond Expr, then [Stmt], els [Stmt])
+    SFor(init Stmt, cond Expr, post Stmt, body [Stmt])
+    SLoop(body [Stmt])
+    SForIn(v1 string, v2 string, x Expr, body [Stmt])
+    SBreak(label string)
+    SContinue
+    SReturn(vals [Expr])
+    SIncDec(x Expr, op string)
+    SDefer(x Expr)
+}
+
+type Field struct {
+    Name string
+    Type string
+}
+
+type Variant struct {
+    Name   string
+    Fields [Field]
+}
+
+enum Decl {
+    DFunc(name string, tparams [string], params [Field], results [Field], body [Stmt])
+    DEnum(name string, tparams [string], variants [Variant])
+    DStruct(name string, tparams [string], fields [Field])
+}
+
+// ---------- tokens ----------
+
+type Token struct {
+    Kind int // 1 ident, 2 number, 3 string, 4 rune, 5 op, 6 nl, 7 eof
+    Text string
+    Line int
+}
+
+type Lexer struct {
+    src  string
+    i    int
+    line int
+}
+
+func isAlpha(c byte) bool {
+    return (c >= byte('a') && c <= byte('z')) || (c >= byte('A') && c <= byte('Z'))
+}
+
+func isDigit(c byte) bool {
+    return c >= byte('0') && c <= byte('9')
+}
+
+func isOp1(c byte) bool {
+    return contains("+-*/%&|^<>=!~()[]{{}},;.:@#?", string(rune(c)))
+}
+
+func lex(src string) [Token] {
+    lx := Lexer{src: src, i: 0, line: 1}
+    var out [Token]
+    loop {
+        t := lxNext(&lx)
+        out = append(out, t)
+        if t.Kind == 7 {
+            break loop
+        }
+    }
+    return out
+}
+
+func lxNext(l *Lexer) Token {
+    for l.i < len(l.src) {
+        c := l.src[l.i]
+        if c == byte(' ') || c == byte('\t') || c == byte('\r') {
+            l.i++
+            continue
+        }
+        if c == byte('\n') {
+            l.line++
+            l.i++
+            return Token{Kind: 6, Text: "\\n", Line: l.line - 1}
+        }
+        if c == byte('/') && l.i+1 < len(l.src) && l.src[l.i+1] == byte('/') {
+            for l.i < len(l.src) && l.src[l.i] != byte('\n') {
+                l.i++
+            }
+            continue
+        }
+        if c == byte('/') && l.i+1 < len(l.src) && l.src[l.i+1] == byte('*') {
+            l.i = l.i + 2
+            for l.i+1 < len(l.src) && !(l.src[l.i] == byte('*') && l.src[l.i+1] == byte('/')) {
+                if l.src[l.i] == byte('\n') {
+                    l.line++
+                }
+                l.i++
+            }
+            l.i = l.i + 2
+            continue
+        }
+        if isAlpha(c) || c == byte('_') {
+            j := l.i + 1
+            for j < len(l.src) && (isAlpha(l.src[j]) || isDigit(l.src[j]) || l.src[j] == byte('_')) {
+                j++
+            }
+            s := l.src[l.i:j]
+            l.i = j
+            return Token{Kind: 1, Text: s, Line: l.line}
+        }
+        if isDigit(c) {
+            j := l.i
+            for j < len(l.src) && (isDigit(l.src[j]) || isAlpha(l.src[j]) || l.src[j] == byte('.') || l.src[j] == byte('_')) {
+                j++
+            }
+            s := l.src[l.i:j]
+            l.i = j
+            return Token{Kind: 2, Text: s, Line: l.line}
+        }
+        if c == byte('"') {
+            return Token{Kind: 3, Text: lxString(l), Line: l.line}
+        }
+        if c == byte('\'') {
+            j := l.i + 1
+            for j < len(l.src) && l.src[j] != byte('\'') {
+                if l.src[j] == byte('\\') {
+                    j++
+                }
+                j++
+            }
+            s := l.src[l.i : j+1]
+            l.i = j + 1
+            return Token{Kind: 4, Text: s, Line: l.line}
+        }
+        if l.i+3 <= len(l.src) {
+            t := l.src[l.i : l.i+3]
+            if t == "<<=" || t == ">>=" || t == "&^=" || t == "..." {
+                l.i = l.i + 3
+                return Token{Kind: 5, Text: t, Line: l.line}
+            }
+        }
+        if l.i+2 <= len(l.src) {
+            t := l.src[l.i : l.i+2]
+            if contains("<< >> &^ == != <= >= && || <- -> ++ -- := += -= *= /= %= &= |= ^=", t) {
+                l.i = l.i + 2
+                return Token{Kind: 5, Text: t, Line: l.line}
+            }
+        }
+        if isOp1(c) {
+            l.i++
+            return Token{Kind: 5, Text: string(rune(c)), Line: l.line}
+        }
+        l.i++
+    }
+    return Token{Kind: 7, Text: "eof", Line: l.line}
+}
+
+func lxString(l *Lexer) string {
+    j := l.i + 1
+    exprDepth := 0
+    for j < len(l.src) {
+        d := l.src[j]
+        if exprDepth == 0 {
+            if d == byte('\\') {
+                j = j + 2
+                continue
+            }
+            if d == byte('\n') || d == byte('"') {
+                break
+            }
+            if d == byte('{') && j+1 < len(l.src) && l.src[j+1] == byte('{') {
+                j = j + 2
+                continue
+            }
+            if d == byte('{') {
+                exprDepth++
+                j++
+                continue
+            }
+            if d == byte('}') && j+1 < len(l.src) && l.src[j+1] == byte('}') {
+                j = j + 2
+                continue
+            }
+            j++
+            continue
+        }
+        if d == byte('\n') {
+            break
+        }
+        if d == byte('"') {
+            q := j
+            j++
+            for j < len(l.src) && l.src[j] != byte('"') && l.src[j] != byte('\n') {
+                if l.src[j] == byte('\\') {
+                    j++
+                }
+                j++
+            }
+            if j >= len(l.src) || l.src[j] == byte('\n') {
+                j = q
+                break
+            }
+            j++
+            continue
+        }
+        if d == byte('{') {
+            exprDepth++
+            j++
+            continue
+        }
+        if d == byte('}') {
+            exprDepth--
+            j++
+            continue
+        }
+        j++
+    }
+    s := l.src[l.i : j+1]
+    l.i = j + 1
+    return s
+}
+
+// ---------- parser ----------
+
+type Parser struct {
+    toks [Token]
+    pos  int
+}
+
+func cur(p *Parser) Token {
+    return p.toks[p.pos]
+}
+
+func peek(p *Parser) Token {
+    if p.pos+1 < len(p.toks) {
+        return p.toks[p.pos+1]
+    }
+    return p.toks[len(p.toks)-1]
+}
+
+func advance(p *Parser) Token {
+    t := p.toks[p.pos]
+    if p.pos < len(p.toks)-1 {
+        p.pos++
+    }
+    return t
+}
+
+func skipNL(p *Parser) {
+    for cur(p).Kind == 6 {
+        advance(p)
+    }
+}
+
+func expect(p *Parser, text string) {
+    if cur(p).Text != text {
+        println("line {cur(p).Line}: expected {text}, got {cur(p).Text}")
+        os.Exit(1)
+    }
+    advance(p)
+}
+
+func expectIdent(p *Parser) string {
+    if cur(p).Kind != 1 {
+        println("line {cur(p).Line}: expected identifier, got {cur(p).Text}")
+        os.Exit(1)
+    }
+    return advance(p).Text
+}
+
+// parseType parses a type and returns it as source text.
+func parseType(p *Parser) string {
+    t := cur(p)
+    if t.Text == "map" {
+        advance(p)
+        expect(p, "<")
+        k := parseType(p)
+        expect(p, ",")
+        v := parseType(p)
+        expect(p, ">")
+        return "map<" + k + ", " + v + ">"
+    }
+    if t.Text == "chan" {
+        advance(p)
+        expect(p, "<")
+        e := parseType(p)
+        expect(p, ">")
+        return "chan<" + e + ">"
+    }
+    if t.Text == "[" {
+        advance(p)
+        e := parseType(p)
+        expect(p, "]")
+        return "[" + e + "]"
+    }
+    if t.Text == "*" {
+        advance(p)
+        return "*" + parseType(p)
+    }
+    name := expectIdent(p)
+    if cur(p).Text == "." {
+        advance(p)
+        name = name + "." + expectIdent(p)
+    }
+    if cur(p).Text == "[" {
+        advance(p)
+        args := parseType(p)
+        for cur(p).Text == "," {
+            advance(p)
+            args = args + ", " + parseType(p)
+        }
+        expect(p, "]")
+        return name + "[" + args + "]"
+    }
+    return name
+}
+
+func parseFieldList(p *Parser, closer string) [Field] {
+    var out [Field]
+    for cur(p).Text != closer {
+        name := ""
+        if cur(p).Kind == 1 && peek(p).Text != ")" && peek(p).Kind != 6 {
+            name = advance(p).Text
+        }
+        ty := parseType(p)
+        out = append(out, Field{Name: name, Type: ty})
+        if cur(p).Text == "," {
+            advance(p)
+            continue
+        }
+        break
+    }
+    return out
+}
+
+// ---------- expressions (precedence climbing) ----------
+
+func precOf(op string) int {
+    if op == "||" { return 1 }
+    if op == "&&" { return 2 }
+    if op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" { return 3 }
+    if op == "+" || op == "-" { return 4 }
+    if op == "*" || op == "/" || op == "%" || op == "<<" || op == ">>" || op == "&" || op == "&^" { return 5 }
+    return 0
+}
+
+func parseExpr(p *Parser, minPrec int) Expr {
+    x := parseUnary(p)
+    for {
+        op := cur(p).Text
+        prec := precOf(op)
+        if prec == 0 || prec < minPrec {
+            return x
+        }
+        advance(p)
+        y := parseExpr(p, prec+1)
+        x = EBinary(op, x, y)
+    }
+}
+
+func parseUnary(p *Parser) Expr {
+    t := cur(p)
+    if t.Text == "-" || t.Text == "!" || t.Text == "&" || t.Text == "*" || t.Text == "+" || t.Text == "^" {
+        advance(p)
+        return EUnary(t.Text, parseUnary(p))
+    }
+    return parsePostfix(p)
+}
+
+func parsePostfix(p *Parser) Expr {
+    x := parsePrimary(p)
+    for {
+        t := cur(p)
+        if t.Text == "(" {
+            advance(p)
+            var args [Expr]
+            for cur(p).Text != ")" {
+                args = append(args, parseExpr(p, 1))
+                if cur(p).Text == "," {
+                    advance(p)
+                    continue
+                }
+                break
+            }
+            expect(p, ")")
+            x = ECall(x, args)
+            continue
+        }
+        if t.Text == "." {
+            advance(p)
+            x = ESelector(x, expectIdent(p))
+            continue
+        }
+        if t.Text == "[" {
+            advance(p)
+            if cur(p).Text == ":" {
+                advance(p)
+                hi := ENil
+                if cur(p).Text != "]" {
+                    hi = parseExpr(p, 1)
+                }
+                expect(p, "]")
+                x = ESlice(x, ENil, hi)
+                continue
+            }
+            first := parseExpr(p, 1)
+            if cur(p).Text == ":" {
+                advance(p)
+                hi := ENil
+                if cur(p).Text != "]" {
+                    hi = parseExpr(p, 1)
+                }
+                expect(p, "]")
+                x = ESlice(x, first, hi)
+                continue
+            }
+            var idx [Expr]
+            idx = append(idx, first)
+            for cur(p).Text == "," {
+                advance(p)
+                idx = append(idx, parseExpr(p, 1))
+            }
+            expect(p, "]")
+            x = EIndex(x, idx)
+            continue
+        }
+        if t.Text == "?" {
+            advance(p)
+            x = ETry(x)
+            continue
+        }
+        if t.Text == "{{" {
+            // struct literal after a type name
+            names := [string]{}
+            var vals [Expr]
+            advance(p)
+            for cur(p).Text != "}}" {
+                skipNL(p)
+                if cur(p).Text == "}}" {
+                    break
+                }
+                if cur(p).Kind == 1 && peek(p).Text == ":" {
+                    names = append(names, advance(p).Text)
+                    advance(p)
+                } else {
+                    names = append(names, "")
+                }
+                vals = append(vals, parseExpr(p, 1))
+                skipNL(p)
+                if cur(p).Text == "," {
+                    advance(p)
+                    continue
+                }
+                break
+            }
+            expect(p, "}}")
+            x = EStructLit(typeTextOf(x), names, vals)
+            continue
+        }
+        return x
+    }
+}
+
+func typeTextOf(x Expr) string {
+    return match x {
+    EIdent(name) -> name
+    EIndex(b, idx) -> typeTextOf(b) + "[...]"
+    ESelector(b, sel) -> typeTextOf(b) + "." + sel
+    _ -> "?"
+    }
+}
+
+func parsePrimary(p *Parser) Expr {
+    t := cur(p)
+    if t.Kind == 2 {
+        advance(p)
+        return ENum(t.Text)
+    }
+    if t.Kind == 3 {
+        advance(p)
+        return EStr(t.Text)
+    }
+    if t.Kind == 4 {
+        advance(p)
+        return ERune(t.Text)
+    }
+    if t.Text == "(" {
+        advance(p)
+        x := parseExpr(p, 1)
+        expect(p, ")")
+        return x
+    }
+    if t.Text == "[" {
+        advance(p)
+        elem := parseType(p)
+        expect(p, "]")
+        expect(p, "{{")
+        var vals [Expr]
+        for cur(p).Text != "}}" {
+            skipNL(p)
+            if cur(p).Text == "}}" {
+                break
+            }
+            vals = append(vals, parseExpr(p, 1))
+            skipNL(p)
+            if cur(p).Text == "," {
+                advance(p)
+                continue
+            }
+            break
+        }
+        expect(p, "}}")
+        return ESliceLit(elem, vals)
+    }
+    if t.Text == "map" {
+        advance(p)
+        expect(p, "<")
+        k := parseType(p)
+        expect(p, ",")
+        v := parseType(p)
+        expect(p, ">")
+        expect(p, "{{")
+        var keys [Expr]
+        var vals [Expr]
+        for cur(p).Text != "}}" {
+            skipNL(p)
+            if cur(p).Text == "}}" {
+                break
+            }
+            keys = append(keys, parseExpr(p, 1))
+            expect(p, ":")
+            vals = append(vals, parseExpr(p, 1))
+            skipNL(p)
+            if cur(p).Text == "," {
+                advance(p)
+                continue
+            }
+            break
+        }
+        expect(p, "}}")
+        return EMapLit(k, v, keys, vals)
+    }
+    if t.Text == "match" {
+        advance(p)
+        subj := ENil
+        if cur(p).Text != "{{" {
+            subj = parseExpr(p, 1)
+        }
+        expect(p, "{{")
+        var arms [Arm]
+        for {
+            skipNL(p)
+            if cur(p).Text == "}}" {
+                advance(p)
+                break
+            }
+            pat := patText(p)
+            expect(p, "->")
+            if cur(p).Text == "{{" {
+                body := parseBlock(p)
+                arms = append(arms, Arm{Pat: pat, Expr: ENil, Stmts: body})
+            } else {
+                e := parseExpr(p, 1)
+                arms = append(arms, Arm{Pat: pat, Expr: e})
+            }
+        }
+        return EMatch(subj, arms)
+    }
+    if t.Kind == 1 {
+        advance(p)
+        return EIdent(t.Text)
+    }
+    println("line {t.Line}: expected expression, got {t.Text}")
+    os.Exit(1)
+    return ENil
+}
+
+// patText captures a pattern up to -> as source text (v1).
+func patText(p *Parser) string {
+    out := ""
+    depth := 0
+    for {
+        t := cur(p)
+        if depth == 0 && t.Text == "->" {
+            return out
+        }
+        if depth == 0 && t.Kind == 6 {
+            println("line {t.Line}: expected -> in match arm")
+            os.Exit(1)
+        }
+        if t.Text == "(" || t.Text == "[" {
+            depth++
+        }
+        if t.Text == ")" || t.Text == "]" {
+            depth--
+        }
+        if out == "" {
+            out = t.Text
+        } else {
+            out = out + " " + t.Text
+        }
+        advance(p)
+    }
+}
+
+// ---------- statements ----------
+
+func parseBlock(p *Parser) [Stmt] {
+    expect(p, "{{")
+    var out [Stmt]
+    for {
+        skipNL(p)
+        if cur(p).Text == "}}" {
+            advance(p)
+            return out
+        }
+        out = append(out, parseStmt(p))
+    }
+}
+
+func parseStmt(p *Parser) Stmt {
+    t := cur(p)
+    if t.Text == "var" {
+        advance(p)
+        name := expectIdent(p)
+        ty := parseType(p)
+        init := ENil
+        if cur(p).Text == "=" {
+            advance(p)
+            init = parseExpr(p, 1)
+        }
+        return SVar(name, ty, init)
+    }
+    if t.Text == "if" {
+        return parseIf(p)
+    }
+    if t.Text == "for" {
+        advance(p)
+        if cur(p).Text == "{{" {
+            return SFor(SNil, ENil, SNil, parseBlock(p))
+        }
+        if cur(p).Kind == 1 && peek(p).Text == "in" {
+            v := advance(p).Text
+            advance(p)
+            x := parseExpr(p, 1)
+            return SForIn(v, "", x, parseBlock(p))
+        }
+        if cur(p).Kind == 1 && peek(p).Text == "," {
+            v1 := advance(p).Text
+            advance(p)
+            v2 := advance(p).Text
+            expect(p, "in")
+            x := parseExpr(p, 1)
+            return SForIn(v1, v2, x, parseBlock(p))
+        }
+        init := parseStmt(p)
+        expect(p, ";")
+        cond := ENil
+        if cur(p).Text != ";" {
+            cond = parseExpr(p, 1)
+        }
+        expect(p, ";")
+        post := SNil
+        if cur(p).Text != "{{" {
+            post = parseStmt(p)
+        }
+        return SFor(init, cond, post, parseBlock(p))
+    }
+    if t.Text == "loop" {
+        advance(p)
+        return SLoop(parseBlock(p))
+    }
+    if t.Text == "break" {
+        advance(p)
+        label := ""
+        if cur(p).Kind == 1 {
+            label = advance(p).Text
+        }
+        return SBreak(label)
+    }
+    if t.Text == "continue" {
+        advance(p)
+        return SContinue
+    }
+    if t.Text == "return" {
+        advance(p)
+        var vals [Expr]
+        if cur(p).Kind != 6 && cur(p).Text != "}}" {
+            vals = append(vals, parseExpr(p, 1))
+            for cur(p).Text == "," {
+                advance(p)
+                vals = append(vals, parseExpr(p, 1))
+            }
+        }
+        return SReturn(vals)
+    }
+    if t.Text == "defer" {
+        advance(p)
+        return SDefer(parseExpr(p, 1))
+    }
+    // expr / assignment / inc-dec
+    x := parseExpr(p, 1)
+    op := cur(p).Text
+    if op == ":=" || op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" {
+        advance(p)
+        var lhs [Expr]
+        lhs = append(lhs, x)
+        for cur(p).Text == "," {
+            // unreachable in v1 (single lhs), kept for shape
+            break
+        }
+        var rhs [Expr]
+        rhs = append(rhs, parseExpr(p, 1))
+        for cur(p).Text == "," {
+            advance(p)
+            rhs = append(rhs, parseExpr(p, 1))
+        }
+        return SAssign(lhs, op, rhs)
+    }
+    if op == "++" || op == "--" {
+        advance(p)
+        return SIncDec(x, op)
+    }
+    return SExprStmt(x)
+}
+
+func parseIf(p *Parser) Stmt {
+    expect(p, "if")
+    cond := parseExpr(p, 1)
+    then := parseBlock(p)
+    var els [Stmt]
+    skipNL(p)
+    if cur(p).Text == "else" {
+        advance(p)
+        if cur(p).Text == "if" {
+            els = append(els, parseIf(p))
+        } else {
+            els = parseBlock(p)
+        }
+    }
+    return SIf(cond, then, els)
+}
+
+// ---------- declarations ----------
+
+func parseDecls(p *Parser) [Decl] {
+    var out [Decl]
+    expect(p, "package")
+    expectIdent(p)
+    for {
+        skipNL(p)
+        t := cur(p)
+        if t.Kind == 7 {
+            return out
+        }
+        if t.Text == "func" {
+            advance(p)
+            name := expectIdent(p)
+            var tp [string]
+            if cur(p).Text == "[" {
+                advance(p)
+                tp = append(tp, expectIdent(p))
+                for cur(p).Text == "," {
+                    advance(p)
+                    tp = append(tp, expectIdent(p))
+                }
+                expect(p, "]")
+            }
+            expect(p, "(")
+            params := parseFieldList(p, ")")
+            expect(p, ")")
+            var results [Field]
+            if cur(p).Text == "(" {
+                advance(p)
+                results = parseFieldList(p, ")")
+                expect(p, ")")
+            } else if cur(p).Text != "{{" && cur(p).Kind != 6 {
+                results = append(results, Field{Name: "", Type: parseType(p)})
+            }
+            skipNL(p)
+            body := parseBlock(p)
+            out = append(out, DFunc(name, tp, params, results, body))
+            continue
+        }
+        if t.Text == "enum" {
+            advance(p)
+            name := expectIdent(p)
+            var tp [string]
+            if cur(p).Text == "[" {
+                advance(p)
+                tp = append(tp, expectIdent(p))
+                for cur(p).Text == "," {
+                    advance(p)
+                    tp = append(tp, expectIdent(p))
+                }
+                expect(p, "]")
+            }
+            expect(p, "{{")
+            var variants [Variant]
+            for {
+                skipNL(p)
+                if cur(p).Text == "}}" {
+                    advance(p)
+                    break
+                }
+                vname := expectIdent(p)
+                var fields [Field]
+                if cur(p).Text == "(" {
+                    advance(p)
+                    fields = parseFieldList(p, ")")
+                    expect(p, ")")
+                }
+                variants = append(variants, Variant{Name: vname, Fields: fields})
+            }
+            out = append(out, DEnum(name, tp, variants))
+            continue
+        }
+        if t.Text == "type" {
+            advance(p)
+            name := expectIdent(p)
+            var tp [string]
+            if cur(p).Text == "[" {
+                advance(p)
+                tp = append(tp, expectIdent(p))
+                for cur(p).Text == "," {
+                    advance(p)
+                    tp = append(tp, expectIdent(p))
+                }
+                expect(p, "]")
+            }
+            expect(p, "struct")
+            expect(p, "{{")
+            var fields [Field]
+            for {
+                skipNL(p)
+                if cur(p).Text == "}}" {
+                    advance(p)
+                    break
+                }
+                fname := expectIdent(p)
+                ftype := parseType(p)
+                fields = append(fields, Field{Name: fname, Type: ftype})
+            }
+            out = append(out, DStruct(name, tp, fields))
+            continue
+        }
+        println("line {t.Line}: expected declaration, got {t.Text}")
+        os.Exit(1)
+    }
+}
+
+// ---------- dumper ----------
+
+func fieldsText(fs [Field]) string {
+    out := ""
+    for i, f in fs {
+        if i > 0 {
+            out = out + ", "
+        }
+        if f.Name != "" {
+            out = out + f.Name + " "
+        }
+        out = out + f.Type
+    }
+    return out
+}
+
+func exprText(x Expr) string {
+    return match x {
+    ENil -> "nil"
+    ENum(s) -> s
+    EStr(s) -> s
+    ERune(s) -> s
+    EIdent(n) -> n
+    EBinary(op, a, b) -> "(" + op + " " + exprText(a) + " " + exprText(b) + ")"
+    EUnary(op, a) -> "(" + op + exprText(a) + ")"
+    ECall(f, args) -> fText(f, args)
+    ESelector(a, sel) -> exprText(a) + "." + sel
+    EIndex(a, idx) -> iText(a, idx)
+    ESlice(a, lo, hi) -> exprText(a) + "[" + exprText(lo) + ":" + exprText(hi) + "]"
+    ESliceLit(elem, vals) -> "[" + elem + "]{{" + exprsText(vals) + "}}"
+    EMapLit(k, v, keys, vals) -> "map<" + k + ", " + v + ">{{" + pairsText(keys, vals) + "}}"
+    EStructLit(t, names, vals) -> t + "{{" + pairsText2(names, vals) + "}}"
+    EMatch(subj, arms) -> matchText(subj, arms)
+    ETry(a) -> exprText(a) + "?"
+    }
+}
+
+func fText(f Expr, args [Expr]) string {
+    return exprText(f) + "(" + exprsText(args) + ")"
+}
+
+func iText(a Expr, idx [Expr]) string {
+    return exprText(a) + "[" + exprsText(idx) + "]"
+}
+
+func exprsText(xs [Expr]) string {
+    out := ""
+    for i, x in xs {
+        if i > 0 {
+            out = out + ", "
+        }
+        out = out + exprText(x)
+    }
+    return out
+}
+
+func pairsText(keys [Expr], vals [Expr]) string {
+    out := ""
+    for i, k in keys {
+        if i > 0 {
+            out = out + ", "
+        }
+        out = out + exprText(k) + ": " + exprText(vals[i])
+    }
+    return out
+}
+
+func pairsText2(names [string], vals [Expr]) string {
+    out := ""
+    for i, n in names {
+        if i > 0 {
+            out = out + ", "
+        }
+        if n != "" {
+            out = out + n + ": "
+        }
+        out = out + exprText(vals[i])
+    }
+    return out
+}
+
+func matchText(subj Expr, arms [Arm]) string {
+    out := "match " + exprText(subj) + " {{"
+    for a in arms {
+        if isENil(a.Expr) {
+            out = out + " " + a.Pat + " -> {{...}}"
+        } else {
+            out = out + " " + a.Pat + " -> " + exprText(a.Expr) + ";"
+        }
+    }
+    return out + " }}}}"
+}
+
+func isENil(x Expr) bool {
+    return match x {
+    ENil -> true
+    _ -> false
+    }
+}
+
+func stmtText(s Stmt) string {
+    return match s {
+    SNil -> ""
+    SVar(n, t, init) -> varText(n, t, init)
+    SAssign(lhs, op, rhs) -> exprsText(lhs) + " " + op + " " + exprsText(rhs)
+    SExprStmt(x) -> exprText(x)
+    SIf(cond, then, els) -> ifText(cond, then, els)
+    SFor(init, cond, post, body) -> "for " + stmtText(init) + "; " + exprText(cond) + "; " + stmtText(post) + " {{" + stmtsText(body) + "}}}}"
+    SLoop(body) -> "loop {{" + stmtsText(body) + "}}"
+    SForIn(v1, v2, x, body) -> forInText(v1, v2, x, body)
+    SBreak(label) -> "break " + label
+    SContinue -> "continue"
+    SReturn(vals) -> "return " + exprsText(vals)
+    SIncDec(x, op) -> exprText(x) + op
+    SDefer(x) -> "defer " + exprText(x)
+    }
+}
+
+func varText(n string, t string, init Expr) string {
+    if isENil(init) {
+        return "var " + n + " " + t
+    }
+    return "var " + n + " " + t + " = " + exprText(init)
+}
+
+func ifText(cond Expr, then [Stmt], els [Stmt]) string {
+    out := "if " + exprText(cond) + " {{" + stmtsText(then) + "}}}}"
+    if len(els) > 0 {
+        out = out + " else {{" + stmtsText(els) + "}}"
+    }
+    return out
+}
+
+func forInText(v1 string, v2 string, x Expr, body [Stmt]) string {
+    vars := v1
+    if v2 != "" {
+        vars = v1 + ", " + v2
+    }
+    return "for " + vars + " in " + exprText(x) + " {{" + stmtsText(body) + "}}}}"
+}
+
+func stmtsText(ss [Stmt]) string {
+    out := ""
+    for s in ss {
+        if out != "" {
+            out = out + " "
+        }
+        out = out + stmtText(s) + ";"
+    }
+    return out
+}
+
+func declText(d Decl) string {
+    return match d {
+    DFunc(name, tp, params, results, body) -> "func " + name + "(" + fieldsText(params) + ") (" + fieldsText(results) + ") {{" + stmtsText(body) + "}}}}"
+    DEnum(name, tp, variants) -> enumText(name, variants)
+    DStruct(name, tp, fields) -> "type " + name + " struct {{" + fieldsText(fields) + "}}}}"
+    }
+}
+
+func enumText(name string, variants [Variant]) string {
+    out := "enum " + name + " {{"
+    for v in variants {
+        out = out + " " + v.Name + "(" + fieldsText(v.Fields) + ")"
+    }
+    return out + " }}}}"
+}
+
+// ---------- main ----------
+
+func main() {
+    args := os.Args()
+    if len(args) < 2 {
+        println("usage: goparse <file.gopp>")
+        os.Exit(2)
+    }
+    r := os.ReadFile(args[1])
+    match r {
+    Ok(src) -> {
+        toks := lex(src)
+        p := Parser{toks: toks, pos: 0}
+        decls := parseDecls(&p)
+        for d in decls {
+            println(declText(d))
+        }
+    }
+    Err(e) -> println("goparse:", e)
+    }
+}
