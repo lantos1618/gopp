@@ -2098,6 +2098,30 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 				c.checkExpr(a)
 			}
 			return tvoid
+		case "assert":
+			// gopp test assertion: assert(cond), assertEq(a, b)
+			if len(ex.Args) != 1 {
+				c.diag.errorfAt(ex.Line, ex.Col, "assert takes 1 argument")
+				return terr
+			}
+			ct := c.checkExpr(ex.Args[0])
+			c.expectBool(ct, lineOf(ex.Args[0]), colOf(ex.Args[0]), "assert condition")
+			return tvoid
+		case "assertEq":
+			if len(ex.Args) != 2 {
+				c.diag.errorfAt(ex.Line, ex.Col, "assertEq takes 2 arguments")
+				return terr
+			}
+			at := c.checkExpr(ex.Args[0])
+			bt := c.checkExpr(ex.Args[1])
+			switch at.(type) {
+			case tBasic, tUntypedInt, tUntypedFloat:
+			default:
+				c.diag.errorfAt(lineOf(ex.Args[0]), colOf(ex.Args[0]), "assertEq needs basic types, got %s", at)
+				return terr
+			}
+			c.expect(bt, at, lineOf(ex.Args[1]), colOf(ex.Args[1]))
+			return tvoid
 		case "panic":
 			for _, a := range ex.Args {
 				c.checkExpr(a)

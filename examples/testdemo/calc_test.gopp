@@ -1,0 +1,20 @@
+package main
+
+// gopp test: this file is skipped by normal builds and compiled only
+// under `gopp test`.
+
+func TestDouble() {
+    assertEq(double(2), 4)
+    assertEq(double(-1), -2)
+    assert(double(0) == 0)
+}
+
+func TestSumTo() {
+    assertEq(sumTo(4), 10)
+    assertEq(sumTo(1), 1)
+}
+
+func TestStrings() {
+    assertEq("go" + "++", "go++")
+    assert(len("gopp") == 4)
+}

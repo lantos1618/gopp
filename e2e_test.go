@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -305,5 +306,31 @@ func TestEndToEndMapLit(t *testing.T) {
 	want := "1 2\n0\n15\n3\n5\n"
 	if got != want {
 		t.Fatalf("maplit.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestGoppTestDriver(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := runTest([]string{"examples/testdemo"}, &out, &errb); code != 0 {
+		t.Fatalf("runTest exit %d:\n%s\n%s", code, out.String(), errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"ok   TestDouble", "ok   TestSumTo", "ok   TestStrings", "3 test(s) passed"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("runTest output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGoppTestFailure(t *testing.T) {
+	dir := t.TempDir()
+	writePkg(t, dir, "x.gopp", "package main\n\nfunc main() {}\n")
+	writePkg(t, dir, "x_test.gopp", "package main\n\nfunc TestBad() {\n    assertEq(1+1, 3)\n}\n")
+	var out, errb bytes.Buffer
+	if code := runTest([]string{dir}, &out, &errb); code != 1 {
+		t.Fatalf("runTest exit = %d, want 1:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "FAIL TestBad: assertEq failed: 2 != 3") {
+		t.Fatalf("expected failure report, got:\n%s", out.String())
 	}
 }

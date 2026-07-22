@@ -32,11 +32,18 @@ type pkg struct {
 }
 
 // loadGraph loads the package in dir and, recursively, its imports.
+// *_test.gopp files are excluded (they only load under loadGraphTests).
 func loadGraph(dir string) *pkg {
-	return loadPkg(dir, "", nil, map[string]*pkg{})
+	return loadPkg(dir, "", nil, false, map[string]*pkg{})
 }
 
-func loadPkg(dir string, impPath string, stack []string, cache map[string]*pkg) *pkg {
+// loadGraphTests is loadGraph with the root package's *_test.gopp files
+// included (gopp test). Dependencies never load their test files.
+func loadGraphTests(dir string) *pkg {
+	return loadPkg(dir, "", nil, true, map[string]*pkg{})
+}
+
+func loadPkg(dir string, impPath string, stack []string, testRoot bool, cache map[string]*pkg) *pkg {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		p := &pkg{diags: &Diagnostics{}}
@@ -75,6 +82,10 @@ func loadPkg(dir string, impPath string, stack []string, cache map[string]*pkg) 
 	} else {
 		for _, e := range ents {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".gopp") {
+				// *_test.gopp only loads for gopp test's root package
+				if strings.HasSuffix(e.Name(), "_test.gopp") && !testRoot {
+					continue
+				}
 				names = append(names, e.Name())
 			}
 		}
@@ -153,7 +164,7 @@ func loadPkg(dir string, impPath string, stack []string, cache map[string]*pkg) 
 				continue
 			}
 		}
-		dep := loadPkg(depDir, imp.Path, append(append([]string{}, stack...), abs), cache)
+		dep := loadPkg(depDir, imp.Path, append(append([]string{}, stack...), abs), false, cache)
 		p.imports = append(p.imports, imp)
 		p.deps = append(p.deps, dep)
 		if dep.name == "" {
@@ -249,6 +260,33 @@ func printGraphDiags(root *pkg) bool {
 		fmt.Fprint(os.Stderr, p.diags.Render(p.src))
 	}
 	return graphHasErrors(root)
+}
+
+// emitGraphTest is emitGraph for gopp test: the root package's user
+// main() is renamed aside so the generated runner can own main().
+func emitGraphTest(root *pkg, outDir string) {
+	for _, p := range topoOrder(root) {
+		if p.chk == nil || p.diags.HasErrors() {
+			continue
+		}
+		dir := filepath.Join(outDir, p.out)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fatal(err)
+		}
+		name := p.name + ".go"
+		if p.name == "main" {
+			name = "main.go"
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(emitMode(p.file, p.chk, p == root)), 0o644); err != nil {
+			fatal(err)
+		}
+		if p.stdlibGo != "" {
+			if err := os.WriteFile(filepath.Join(dir, "native.go"), []byte(p.stdlibGo), 0o644); err != nil {
+				fatal(err)
+			}
+		}
+	}
+	writePrelude(outDir)
 }
 
 // emitGraph writes one Go file per package into the outdir tree,

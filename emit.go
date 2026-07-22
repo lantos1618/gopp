@@ -26,10 +26,15 @@ type emitter struct {
 	needTime    bool            // emitted time.Duration somewhere: add the import
 	needGopp    bool            // emitted a gopp.* reference: add the prelude import
 	usedImports map[string]bool // package qualifiers referenced: add imports
+	testMode    bool            // gopp test: user main() is renamed aside
 }
 
 func emit(f *File, c *checker) string {
-	e := &emitter{c: c, usedImports: map[string]bool{}}
+	return emitMode(f, c, false)
+}
+
+func emitMode(f *File, c *checker, testMode bool) string {
+	e := &emitter{c: c, usedImports: map[string]bool{}, testMode: testMode}
 	for _, d := range f.Decls {
 		switch dd := d.(type) {
 		case *EnumDecl:
@@ -364,6 +369,15 @@ func (e *emitter) emitImpl(d *ImplDecl) {
 	}
 }
 
+// funcName renames the user's main aside in test mode so the generated
+// test runner can own main().
+func (e *emitter) funcName(fn *FuncDecl) string {
+	if e.testMode && fn.Name == "main" {
+		return "goppDisabledMain"
+	}
+	return fn.Name
+}
+
 // sigGo renders (params) results without the function name.
 func (e *emitter) sigGo(params, results []Field) string {
 	var ps []string
@@ -420,7 +434,7 @@ func (e *emitter) emitFunc(fn *FuncDecl) {
 		}
 		res = " (" + strings.Join(rs, ", ") + ")"
 	}
-	e.s("func %s%s(%s)%s {\n", fn.Name, tp, strings.Join(params, ", "), res)
+	e.s("func %s%s(%s)%s {\n", e.funcName(fn), tp, strings.Join(params, ", "), res)
 	e.emitStmts(fn.Body.List)
 	e.s("}\n\n")
 }
@@ -854,6 +868,14 @@ func (e *emitter) call(ex *CallExpr) string {
 			// go++'s own helpers: stdout + %v, not Go's builtin println
 			e.needGopp = true
 			return "gopp.P" + fun.Name[1:] + "(" + argStr + ")"
+		}
+		if fun.Name == "assert" {
+			e.needGopp = true
+			return "gopp.Assert(" + argStr + ")"
+		}
+		if fun.Name == "assertEq" {
+			e.needGopp = true
+			return "gopp.AssertEq(" + argStr + ")"
 		}
 		return fun.Name + "(" + argStr + ")"
 	default:

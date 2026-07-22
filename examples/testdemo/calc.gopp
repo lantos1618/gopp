@@ -1,0 +1,17 @@
+package main
+
+func double(n int) int {
+    return n * 2
+}
+
+func sumTo(n int) int {
+    total := 0
+    for i := 1; i <= n; i++ {
+        total += i
+    }
+    return total
+}
+
+func main() {
+    println("calc:", double(21), sumTo(4))
+}

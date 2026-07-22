@@ -392,6 +392,15 @@ drop order) do not apply and are deliberately deleted from the roadmap.
   document symbols, import-aware analysis (on-disk deps wired into
   buffer checking). Gaps: dirty-buffer deps, cross-file hover.
 
+## gopp test
+
+- `*_test.gopp` files are skipped by normal builds and compiled only
+  under `gopp test [dir]`. Every `func TestXxx()` (no params, no
+  results) in the root package runs under a generated runner: `ok`
+  lines per pass, `FAIL name: reason` plus a non-zero exit on panic.
+- Assertions are builtins: `assert(cond)`, `assertEq(a, b)` (basic
+  types). Test functions in dependencies are not run.
+
 ## Testing (§12)
 
 - `tests/ui/*.gopp`: `//~ ERROR msg` / `//~ WARN msg` annotations matched

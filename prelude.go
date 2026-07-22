@@ -36,6 +36,19 @@ func Str(parts ...any) string {
 	return b.String()
 }
 
+// test assertions (gopp test): panic on failure, the runner recovers.
+func Assert(cond bool) {
+	if !cond {
+		panic("assertion failed")
+	}
+}
+
+func AssertEq[T comparable](a, b T) {
+	if a != b {
+		panic(fmt.Sprintf("assertEq failed: %v != %v", a, b))
+	}
+}
+
 // Result[T, E] — the go++ replacement for (T, error) returns.
 
 type gopp_tag_Result int

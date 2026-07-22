@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +42,7 @@ import (
 //   - comptime functions
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp run <input.gopp> | gopp build <input.gopp> [-o binary] | gopp fmt [-w] <files...> | gopp lsp")
+		fmt.Fprintln(os.Stderr, "usage: gopp <input.gopp> [-o outdir] | gopp run <input.gopp> | gopp build <input.gopp> [-o binary] | gopp test [dir] | gopp fmt [-w] <files...> | gopp lsp")
 		os.Exit(2)
 	}
 	if os.Args[1] == "fmt" {
@@ -60,6 +61,9 @@ func main() {
 	}
 	if os.Args[1] == "build" {
 		os.Exit(runBuild(os.Args[2:]))
+	}
+	if os.Args[1] == "test" {
+		os.Exit(runTest(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	in := os.Args[1]
 	outDir := "gopp-out"
@@ -161,6 +165,99 @@ func runRun(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// runTest implements `gopp test <dir>`: load the package with its
+// *_test.gopp files, generate the runner, and `go run` it.
+func runTest(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 1 {
+		fmt.Fprintln(stderr, "usage: gopp test [dir | file.gopp]")
+		return 2
+	}
+	dir := "."
+	if len(args) == 1 {
+		dir = args[0]
+	}
+	if strings.HasSuffix(dir, ".gopp") {
+		dir = filepath.Dir(dir)
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		fmt.Fprintln(stderr, "gopp test: go toolchain not found on PATH")
+		return 1
+	}
+	root := loadGraphTests(dir)
+	checkGraph(root)
+	if printGraphDiags(root) {
+		return 1
+	}
+	var tests []string
+	for _, d := range root.file.Decls {
+		if fn, ok := d.(*FuncDecl); ok && strings.HasPrefix(fn.Name, "Test") && len(fn.Params) == 0 && len(fn.Results) == 0 {
+			tests = append(tests, fn.Name)
+		}
+	}
+	if len(tests) == 0 {
+		fmt.Fprintln(stderr, "gopp test: no Test functions found in", dir)
+		return 1
+	}
+	outDir, err := os.MkdirTemp("", "gopp-test-")
+	if err != nil {
+		fmt.Fprintln(stderr, "gopp:", err)
+		return 1
+	}
+	defer os.RemoveAll(outDir)
+	emitGraphTest(root, outDir)
+	if err := os.WriteFile(filepath.Join(outDir, "testmain.go"), []byte(testMainSrc(tests)), 0o644); err != nil {
+		fmt.Fprintln(stderr, "gopp:", err)
+		return 1
+	}
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = outDir
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintln(stderr, "gopp:", err)
+		return 1
+	}
+	return 0
+}
+
+// testMainSrc renders the generated runner: each Test func runs under
+// recover; failures report and exit non-zero.
+func testMainSrc(tests []string) string {
+	var b strings.Builder
+	b.WriteString("package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n\n")
+	b.WriteString("func main() {\n")
+	b.WriteString("tests := []struct {\nname string\nf func()\n}{\n")
+	for _, t := range tests {
+		fmt.Fprintf(&b, "{%q, %s},\n", t, t)
+	}
+	b.WriteString("}\n")
+	b.WriteString(`failed := 0
+for _, t := range tests {
+func() {
+defer func() {
+if r := recover(); r != nil {
+failed++
+fmt.Printf("FAIL %s: %v\n", t.name, r)
+}
+}()
+t.f()
+fmt.Printf("ok   %s\n", t.name)
+}()
+}
+if failed > 0 {
+fmt.Printf("%d test(s) failed\n", failed)
+os.Exit(1)
+}
+fmt.Printf("%d test(s) passed\n", len(tests))
+}
+`)
+	return b.String()
 }
 
 // runBuild compiles the input to a real binary with `go build` (no
