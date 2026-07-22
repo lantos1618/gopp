@@ -1,0 +1,54 @@
+{
+  "name": "gopp-vscode",
+  "displayName": "go++",
+  "description": "Syntax highlighting and language server support for the go++ language",
+  "version": "0.1.0",
+  "publisher": "gopp",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onLanguage:gopp"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "gopp",
+        "aliases": [
+          "go++",
+          "gopp"
+        ],
+        "extensions": [
+          ".gopp"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gopp",
+        "scopeName": "source.gopp",
+        "path": "./syntaxes/gopp.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "go++",
+      "properties": {
+        "gopp.lspPath": {
+          "type": "string",
+          "default": "gopp",
+          "description": "Path to the gopp compiler binary used for the language server (`gopp lsp`)"
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "vscode-languageclient": "^9.0.0"
+  }
+}
