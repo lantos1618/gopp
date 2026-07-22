@@ -260,7 +260,7 @@ func (p *parser) parseFuncDecl() Decl {
 	if p.cur().text == "(" {
 		p.next()
 		results = p.parseFieldList(")")
-	} else if p.cur().text != "{" && p.cur().kind != kNewline {
+	} else if p.cur().text != "{" && p.cur().text != "=" && p.cur().kind != kNewline {
 		results = []Field{{Type: p.parseType(), Line: p.cur().line}}
 	}
 	p.skipNL()
@@ -331,7 +331,7 @@ func (p *parser) parseImplDecl() Decl {
 		if p.cur().text == "(" {
 			p.next()
 			fn.Results = p.parseFieldList(")")
-		} else if p.cur().text != "{" && p.cur().kind != kNewline {
+		} else if p.cur().text != "{" && p.cur().text != "=" && p.cur().kind != kNewline {
 			fn.Results = []Field{{Type: p.parseType(), Line: p.cur().line}}
 		}
 		p.skipNL()

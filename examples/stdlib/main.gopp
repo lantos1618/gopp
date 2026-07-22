@@ -4,6 +4,9 @@ package main
 // compiler's registry provides the package (native Go implementations).
 import "str"
 import "conv"
+import "math"
+import "os"
+import "time"
 
 func shout(s string) string {
     return str.ToUpper(s) + "!"
@@ -26,5 +29,33 @@ func main() {
         Ok(v) -> println(v)
         Err(e) -> println("err")
     }
+    more()
+}
+
+
+func more() {
+    println(math.Sqrt(16.0))
+    println(math.Floor(3.7))
+    println(math.Abs(-2.5))
+    println(math.Max(1.5, 2.5))
+    println(len(os.Args()) > 0)
+    w := os.WriteFile("out.txt", "hi from go++")
+    match w {
+        Ok(v) -> println("wrote", v)
+        Err(e) -> println("write err")
+    }
+    r := os.ReadFile("out.txt")
+    match r {
+        Ok(v) -> println(v)
+        Err(e) -> println("read err")
+    }
+    m := os.ReadFile("missing.txt")
+    match m {
+        Ok(v) -> println("unexpected", v)
+        Err(e) -> println("read err")
+    }
+    time.Sleep(1 * ms)
+    println("slept")
+    println(time.Unix() > 1000000)
 }
 

@@ -813,6 +813,11 @@ func (e *emitter) call(ex *CallExpr) string {
 			// inferred type args ride along: Ok(1) -> Ok[int, string](1)
 			return e.ctorRef(ct, e.typeArgsGo(e.c.inferred[fun])) + "(" + argStr + ")"
 		}
+		if fun.Name == "println" || fun.Name == "print" {
+			// go++'s own helpers: stdout + %v, not Go's builtin println
+			e.needGopp = true
+			return "gopp.P" + fun.Name[1:] + "(" + argStr + ")"
+		}
 		return fun.Name + "(" + argStr + ")"
 	default:
 		return e.expr(ex.Fun) + "(" + argStr + ")"

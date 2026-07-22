@@ -83,7 +83,7 @@ func TestEndToEndTry(t *testing.T) {
 
 func TestEndToEndComptime(t *testing.T) {
 	got := compileAndRun(t, "examples/comptime.gopp")
-	want := "7\n1048576\ngo++\ntrue\n42\n2\n3000\n60\nabc\n"
+	want := "7\n1048576\ngo++\ntrue\n42\n2\n3000\n60ns\nabc\n"
 	if got != want {
 		t.Fatalf("comptime.gopp output:\n got %q\nwant %q", got, want)
 	}
@@ -156,7 +156,7 @@ func TestEndToEndOperators(t *testing.T) {
 
 func TestEndToEndStdlib(t *testing.T) {
 	got := compilePkgAndRun(t, "examples/stdlib")
-	want := "GO++!\na-b-c\ntrue\ntrue\nbbb\n42!\n124\nerr\n"
+	want := "GO++!\na-b-c\ntrue\ntrue\nbbb\n42!\n124\nerr\n4\n3\n2.5\n2.5\ntrue\nwrote true\nhi from go++\nread err\nslept\ntrue\n"
 	if got != want {
 		t.Fatalf("stdlib output:\n got %q\nwant %q", got, want)
 	}

@@ -73,7 +73,7 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
    ~~comptime metaprogramming (§10)~~ ✅ · ~~sema columns (§11)~~ ✅ ·
    ~~LSP v1 (§28)~~ ✅ · ~~CI/README/`gopp run`~~ ✅ ·
    ~~comptime match + string builtins~~ ✅
-2. ~~stdlib v1 (str, conv + native FFI)~~ ✅ · ~~generic impls~~ ✅ ·
+2. ~~stdlib v1 (str, conv + native FFI)~~ ✅ · ~~stdlib v2 (math, os, time)~~ ✅ · ~~generic impls~~ ✅ ·
    ~~compound assign (+ sema leak fix)~~ ✅
 3. ~~default method bodies (§23-lite)~~ ✅
 4. ~~indexing overloads (`index`/`set` methods)~~ ✅

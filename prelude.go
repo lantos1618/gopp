@@ -8,7 +8,10 @@ package main
 // (tagConst, fieldGo, the try desugar).
 const prelude = `package gopp
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // duration shorthands so "16 * ms" style code works
 var Ms = time.Millisecond
@@ -16,6 +19,11 @@ var Second = time.Second
 var Minute = time.Minute
 
 func GoppAfter(d time.Duration) <-chan time.Time { return time.After(d) }
+
+// go++'s println/print: real stdout, %v formatting (Go's builtin println
+// writes to stderr and prints floats as exponents).
+func Println(a ...any) { fmt.Println(a...) }
+func Print(a ...any)   { fmt.Print(a...) }
 
 // Result[T, E] — the go++ replacement for (T, error) returns.
 

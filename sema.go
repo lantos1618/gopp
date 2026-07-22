@@ -149,6 +149,7 @@ var basicTypes = map[string]bool{
 	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
 	"uintptr": true, "byte": true, "rune": true,
 	"string": true, "bool": true, "float32": true, "float64": true,
+	"duration": true, // time.Duration; ms/second/minute produce it
 }
 
 func sameType(a, b Type) bool {
