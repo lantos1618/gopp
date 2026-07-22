@@ -486,6 +486,9 @@ drop order) do not apply and are deliberately deleted from the roadmap.
   compiler's Go formatter).
 - `programs/goplex` — the lexer, in go++ (golden-tested token stream,
   interpolation state machine included).
+- `programs/goparse` — the recursive-descent parser, in go++ (golden
+  AST dump; pointer-based AST — recursive enums need *Expr). v1 scope:
+  func/enum/struct decls, statements, match, all expression forms.
 - `examples/jsondemo` — a pure-go++ JSON parser in the stdlib plus
   comptime-generated (un)marshalers.
 - The compiler itself remains Go; these programs are the proof of

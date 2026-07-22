@@ -15,39 +15,39 @@ enum Expr {
     EStr(s string)
     ERune(s string)
     EIdent(name string)
-    EBinary(op string, x Expr, y Expr)
-    EUnary(op string, x Expr)
-    ECall(f Expr, args [Expr])
-    ESelector(x Expr, sel string)
-    EIndex(x Expr, idx [Expr])
-    ESlice(x Expr, lo Expr, hi Expr)
+    EBinary(op string, x *Expr, y *Expr)
+    EUnary(op string, x *Expr)
+    ECall(f *Expr, args [Expr])
+    ESelector(x *Expr, sel string)
+    EIndex(x *Expr, idx [Expr])
+    ESlice(x *Expr, lo *Expr, hi *Expr)
     ESliceLit(elem string, vals [Expr])
     EMapLit(ktype string, vtype string, keys [Expr], vals [Expr])
     EStructLit(tname string, names [string], vals [Expr])
-    EMatch(subj Expr, arms [Arm])
-    ETry(x Expr)
+    EMatch(subj *Expr, arms [Arm])
+    ETry(x *Expr)
 }
 
 type Arm struct {
     Pat   string
-    Expr  Expr    // ENil when the arm is a block
+    Expr  *Expr   // ENil when the arm is a block
     Stmts [Stmt]
 }
 
 enum Stmt {
     SNil
-    SVar(name string, tname string, init Expr)
+    SVar(name string, tname string, init *Expr)
     SAssign(lhs [Expr], op string, rhs [Expr])
-    SExprStmt(x Expr)
-    SIf(cond Expr, then [Stmt], els [Stmt])
-    SFor(init Stmt, cond Expr, post Stmt, body [Stmt])
+    SExprStmt(x *Expr)
+    SIf(cond *Expr, then [Stmt], els [Stmt])
+    SFor(init *Stmt, cond *Expr, post *Stmt, body [Stmt])
     SLoop(body [Stmt])
-    SForIn(v1 string, v2 string, x Expr, body [Stmt])
+    SForIn(v1 string, v2 string, x *Expr, body [Stmt])
     SBreak(label string)
     SContinue
     SReturn(vals [Expr])
-    SIncDec(x Expr, op string)
-    SDefer(x Expr)
+    SIncDec(x *Expr, op string)
+    SDefer(x *Expr)
 }
 
 type Field struct {
@@ -68,6 +68,9 @@ enum Decl {
 
 // ---------- tokens ----------
 
+func ep(x Expr) *Expr { return &x }
+func sp(s Stmt) *Stmt { return &s }
+
 type Token struct {
     Kind int // 1 ident, 2 number, 3 string, 4 rune, 5 op, 6 nl, 7 eof
     Text string
@@ -86,6 +89,10 @@ func isAlpha(c byte) bool {
 
 func isDigit(c byte) bool {
     return c >= byte('0') && c <= byte('9')
+}
+
+func isOp2(t string) bool {
+    return t == "<<" || t == ">>" || t == "&^" || t == "==" || t == "!=" || t == "<=" || t == ">=" || t == "&&" || t == "||" || t == "<-" || t == "->" || t == "++" || t == "--" || t == ":=" || t == "+=" || t == "-=" || t == "*=" || t == "/=" || t == "%=" || t == "&=" || t == "|=" || t == "^="
 }
 
 func isOp1(c byte) bool {
@@ -176,7 +183,7 @@ func lxNext(l *Lexer) Token {
         }
         if l.i+2 <= len(l.src) {
             t := l.src[l.i : l.i+2]
-            if contains("<< >> &^ == != <= >= && || <- -> ++ -- := += -= *= /= %= &= |= ^=", t) {
+            if isOp2(t) {
                 l.i = l.i + 2
                 return Token{Kind: 5, Text: t, Line: l.line}
             }
@@ -258,8 +265,9 @@ func lxString(l *Lexer) string {
 // ---------- parser ----------
 
 type Parser struct {
-    toks [Token]
-    pos  int
+    toks       [Token]
+    pos        int
+    noStructLit bool
 }
 
 func cur(p *Parser) Token {
@@ -389,7 +397,7 @@ func parseExpr(p *Parser, minPrec int) Expr {
         }
         advance(p)
         y := parseExpr(p, prec+1)
-        x = EBinary(op, x, y)
+        x = EBinary(op, ep(x), ep(y))
     }
 }
 
@@ -397,7 +405,7 @@ func parseUnary(p *Parser) Expr {
     t := cur(p)
     if t.Text == "-" || t.Text == "!" || t.Text == "&" || t.Text == "*" || t.Text == "+" || t.Text == "^" {
         advance(p)
-        return EUnary(t.Text, parseUnary(p))
+        return EUnary(t.Text, ep(parseUnary(p)))
     }
     return parsePostfix(p)
 }
@@ -418,12 +426,12 @@ func parsePostfix(p *Parser) Expr {
                 break
             }
             expect(p, ")")
-            x = ECall(x, args)
+            x = ECall(ep(x), args)
             continue
         }
         if t.Text == "." {
             advance(p)
-            x = ESelector(x, expectIdent(p))
+            x = ESelector(ep(x), expectIdent(p))
             continue
         }
         if t.Text == "[" {
@@ -435,7 +443,7 @@ func parsePostfix(p *Parser) Expr {
                     hi = parseExpr(p, 1)
                 }
                 expect(p, "]")
-                x = ESlice(x, ENil, hi)
+                x = ESlice(ep(x), ep(ENil), ep(hi))
                 continue
             }
             first := parseExpr(p, 1)
@@ -446,7 +454,7 @@ func parsePostfix(p *Parser) Expr {
                     hi = parseExpr(p, 1)
                 }
                 expect(p, "]")
-                x = ESlice(x, first, hi)
+                x = ESlice(ep(x), ep(first), ep(hi))
                 continue
             }
             var idx [Expr]
@@ -456,15 +464,15 @@ func parsePostfix(p *Parser) Expr {
                 idx = append(idx, parseExpr(p, 1))
             }
             expect(p, "]")
-            x = EIndex(x, idx)
+            x = EIndex(ep(x), idx)
             continue
         }
         if t.Text == "?" {
             advance(p)
-            x = ETry(x)
+            x = ETry(ep(x))
             continue
         }
-        if t.Text == "{{" {
+        if t.Text == "{{" && !p.noStructLit {
             // struct literal after a type name
             names := [string]{}
             var vals [Expr]
@@ -489,19 +497,19 @@ func parsePostfix(p *Parser) Expr {
                 break
             }
             expect(p, "}}")
-            x = EStructLit(typeTextOf(x), names, vals)
+            x = EStructLit(typeTextOf(ep(x)), names, vals)
             continue
         }
         return x
     }
 }
 
-func typeTextOf(x Expr) string {
-    return match x {
-    EIdent(name) -> name
-    EIndex(b, idx) -> typeTextOf(b) + "[...]"
-    ESelector(b, sel) -> typeTextOf(b) + "." + sel
-    _ -> "?"
+func typeTextOf(x *Expr) string {
+    return match *x {
+        EIdent(name) -> name
+        EIndex(b, idx) -> typeTextOf(b) + "[...]"
+        ESelector(b, sel) -> typeTextOf(b) + "." + sel
+        _ -> "?"
     }
 }
 
@@ -579,7 +587,10 @@ func parsePrimary(p *Parser) Expr {
         advance(p)
         subj := ENil
         if cur(p).Text != "{{" {
+            save := p.noStructLit
+            p.noStructLit = true
             subj = parseExpr(p, 1)
+            p.noStructLit = save
         }
         expect(p, "{{")
         var arms [Arm]
@@ -593,13 +604,13 @@ func parsePrimary(p *Parser) Expr {
             expect(p, "->")
             if cur(p).Text == "{{" {
                 body := parseBlock(p)
-                arms = append(arms, Arm{Pat: pat, Expr: ENil, Stmts: body})
+                arms = append(arms, Arm{Pat: pat, Expr: ep(ENil), Stmts: body})
             } else {
                 e := parseExpr(p, 1)
-                arms = append(arms, Arm{Pat: pat, Expr: e})
+                arms = append(arms, Arm{Pat: pat, Expr: ep(e)})
             }
         }
-        return EMatch(subj, arms)
+        return EMatch(ep(subj), arms)
     }
     if t.Kind == 1 {
         advance(p)
@@ -664,7 +675,7 @@ func parseStmt(p *Parser) Stmt {
             advance(p)
             init = parseExpr(p, 1)
         }
-        return SVar(name, ty, init)
+        return SVar(name, ty, ep(init))
     }
     if t.Text == "if" {
         return parseIf(p)
@@ -672,34 +683,43 @@ func parseStmt(p *Parser) Stmt {
     if t.Text == "for" {
         advance(p)
         if cur(p).Text == "{{" {
-            return SFor(SNil, ENil, SNil, parseBlock(p))
+            return SFor(sp(SNil), ep(ENil), sp(SNil), parseBlock(p))
         }
         if cur(p).Kind == 1 && peek(p).Text == "in" {
             v := advance(p).Text
             advance(p)
+            save := p.noStructLit
+            p.noStructLit = true
             x := parseExpr(p, 1)
-            return SForIn(v, "", x, parseBlock(p))
+            p.noStructLit = save
+            return SForIn(v, "", ep(x), parseBlock(p))
         }
         if cur(p).Kind == 1 && peek(p).Text == "," {
             v1 := advance(p).Text
             advance(p)
             v2 := advance(p).Text
             expect(p, "in")
+            save := p.noStructLit
+            p.noStructLit = true
             x := parseExpr(p, 1)
-            return SForIn(v1, v2, x, parseBlock(p))
+            p.noStructLit = save
+            return SForIn(v1, v2, ep(x), parseBlock(p))
         }
         init := parseStmt(p)
         expect(p, ";")
         cond := ENil
         if cur(p).Text != ";" {
+            save := p.noStructLit
+            p.noStructLit = true
             cond = parseExpr(p, 1)
+            p.noStructLit = save
         }
         expect(p, ";")
         post := SNil
         if cur(p).Text != "{{" {
             post = parseStmt(p)
         }
-        return SFor(init, cond, post, parseBlock(p))
+        return SFor(sp(init), ep(cond), sp(post), parseBlock(p))
     }
     if t.Text == "loop" {
         advance(p)
@@ -731,7 +751,7 @@ func parseStmt(p *Parser) Stmt {
     }
     if t.Text == "defer" {
         advance(p)
-        return SDefer(parseExpr(p, 1))
+        return SDefer(ep(parseExpr(p, 1)))
     }
     // expr / assignment / inc-dec
     x := parseExpr(p, 1)
@@ -754,14 +774,17 @@ func parseStmt(p *Parser) Stmt {
     }
     if op == "++" || op == "--" {
         advance(p)
-        return SIncDec(x, op)
+        return SIncDec(ep(x), op)
     }
-    return SExprStmt(x)
+    return SExprStmt(ep(x))
 }
 
 func parseIf(p *Parser) Stmt {
     expect(p, "if")
+    save := p.noStructLit
+    p.noStructLit = true
     cond := parseExpr(p, 1)
+    p.noStructLit = save
     then := parseBlock(p)
     var els [Stmt]
     skipNL(p)
@@ -773,7 +796,7 @@ func parseIf(p *Parser) Stmt {
             els = parseBlock(p)
         }
     }
-    return SIf(cond, then, els)
+    return SIf(ep(cond), then, els)
 }
 
 // ---------- declarations ----------
@@ -900,32 +923,32 @@ func fieldsText(fs [Field]) string {
     return out
 }
 
-func exprText(x Expr) string {
-    return match x {
-    ENil -> "nil"
-    ENum(s) -> s
-    EStr(s) -> s
-    ERune(s) -> s
-    EIdent(n) -> n
-    EBinary(op, a, b) -> "(" + op + " " + exprText(a) + " " + exprText(b) + ")"
-    EUnary(op, a) -> "(" + op + exprText(a) + ")"
-    ECall(f, args) -> fText(f, args)
-    ESelector(a, sel) -> exprText(a) + "." + sel
-    EIndex(a, idx) -> iText(a, idx)
-    ESlice(a, lo, hi) -> exprText(a) + "[" + exprText(lo) + ":" + exprText(hi) + "]"
-    ESliceLit(elem, vals) -> "[" + elem + "]{{" + exprsText(vals) + "}}"
-    EMapLit(k, v, keys, vals) -> "map<" + k + ", " + v + ">{{" + pairsText(keys, vals) + "}}"
-    EStructLit(t, names, vals) -> t + "{{" + pairsText2(names, vals) + "}}"
-    EMatch(subj, arms) -> matchText(subj, arms)
-    ETry(a) -> exprText(a) + "?"
+func exprText(x *Expr) string {
+    return match *x {
+        ENil -> "nil"
+        ENum(s) -> s
+        EStr(s) -> s
+        ERune(s) -> s
+        EIdent(n) -> n
+        EBinary(op, a, b) -> "(" + op + " " + exprText(a) + " " + exprText(b) + ")"
+        EUnary(op, a) -> "(" + op + exprText(a) + ")"
+        ECall(f, args) -> fText(f, args)
+        ESelector(a, sel) -> exprText(a) + "." + sel
+        EIndex(a, idx) -> iText(a, idx)
+        ESlice(a, lo, hi) -> exprText(a) + "[" + exprText(lo) + ":" + exprText(hi) + "]"
+        ESliceLit(elem, vals) -> "[" + elem + "]{{" + exprsText(vals) + "}}"
+        EMapLit(k, v, keys, vals) -> "map<" + k + ", " + v + ">{{" + pairsText(keys, vals) + "}}"
+        EStructLit(t, names, vals) -> t + "{{" + pairsText2(names, vals) + "}}"
+        EMatch(subj, arms) -> matchText(subj, arms)
+        ETry(a) -> exprText(a) + "?"
     }
 }
 
-func fText(f Expr, args [Expr]) string {
+func fText(f *Expr, args [Expr]) string {
     return exprText(f) + "(" + exprsText(args) + ")"
 }
 
-func iText(a Expr, idx [Expr]) string {
+func iText(a *Expr, idx [Expr]) string {
     return exprText(a) + "[" + exprsText(idx) + "]"
 }
 
@@ -935,7 +958,7 @@ func exprsText(xs [Expr]) string {
         if i > 0 {
             out = out + ", "
         }
-        out = out + exprText(x)
+        out = out + exprText(ep(x))
     }
     return out
 }
@@ -946,7 +969,7 @@ func pairsText(keys [Expr], vals [Expr]) string {
         if i > 0 {
             out = out + ", "
         }
-        out = out + exprText(k) + ": " + exprText(vals[i])
+        out = out + exprText(ep(k)) + ": " + exprText(ep(vals[i]))
     }
     return out
 }
@@ -960,12 +983,12 @@ func pairsText2(names [string], vals [Expr]) string {
         if n != "" {
             out = out + n + ": "
         }
-        out = out + exprText(vals[i])
+        out = out + exprText(ep(vals[i]))
     }
     return out
 }
 
-func matchText(subj Expr, arms [Arm]) string {
+func matchText(subj *Expr, arms [Arm]) string {
     out := "match " + exprText(subj) + " {{"
     for a in arms {
         if isENil(a.Expr) {
@@ -974,55 +997,55 @@ func matchText(subj Expr, arms [Arm]) string {
             out = out + " " + a.Pat + " -> " + exprText(a.Expr) + ";"
         }
     }
-    return out + " }}}}"
+    return out + " }}"
 }
 
-func isENil(x Expr) bool {
-    return match x {
-    ENil -> true
-    _ -> false
+func isENil(x *Expr) bool {
+    return match *x {
+        ENil -> true
+        _ -> false
     }
 }
 
 func stmtText(s Stmt) string {
     return match s {
-    SNil -> ""
-    SVar(n, t, init) -> varText(n, t, init)
-    SAssign(lhs, op, rhs) -> exprsText(lhs) + " " + op + " " + exprsText(rhs)
-    SExprStmt(x) -> exprText(x)
-    SIf(cond, then, els) -> ifText(cond, then, els)
-    SFor(init, cond, post, body) -> "for " + stmtText(init) + "; " + exprText(cond) + "; " + stmtText(post) + " {{" + stmtsText(body) + "}}}}"
-    SLoop(body) -> "loop {{" + stmtsText(body) + "}}"
-    SForIn(v1, v2, x, body) -> forInText(v1, v2, x, body)
-    SBreak(label) -> "break " + label
-    SContinue -> "continue"
-    SReturn(vals) -> "return " + exprsText(vals)
-    SIncDec(x, op) -> exprText(x) + op
-    SDefer(x) -> "defer " + exprText(x)
+        SNil -> ""
+        SVar(n, t, init) -> varText(n, t, init)
+        SAssign(lhs, op, rhs) -> exprsText(lhs) + " " + op + " " + exprsText(rhs)
+        SExprStmt(x) -> exprText(x)
+        SIf(cond, then, els) -> ifText(cond, then, els)
+        SFor(init, cond, post, body) -> "for " + stmtText(*init) + "; " + exprText(cond) + "; " + stmtText(*post) + " {{" + stmtsText(body) + "}}"
+        SLoop(body) -> "loop {{" + stmtsText(body) + "}}"
+        SForIn(v1, v2, x, body) -> forInText(v1, v2, x, body)
+        SBreak(label) -> "break " + label
+        SContinue -> "continue"
+        SReturn(vals) -> "return " + exprsText(vals)
+        SIncDec(x, op) -> exprText(x) + op
+        SDefer(x) -> "defer " + exprText(x)
     }
 }
 
-func varText(n string, t string, init Expr) string {
+func varText(n string, t string, init *Expr) string {
     if isENil(init) {
         return "var " + n + " " + t
     }
     return "var " + n + " " + t + " = " + exprText(init)
 }
 
-func ifText(cond Expr, then [Stmt], els [Stmt]) string {
-    out := "if " + exprText(cond) + " {{" + stmtsText(then) + "}}}}"
+func ifText(cond *Expr, then [Stmt], els [Stmt]) string {
+    out := "if " + exprText(cond) + " {{" + stmtsText(then) + "}}"
     if len(els) > 0 {
         out = out + " else {{" + stmtsText(els) + "}}"
     }
     return out
 }
 
-func forInText(v1 string, v2 string, x Expr, body [Stmt]) string {
+func forInText(v1 string, v2 string, x *Expr, body [Stmt]) string {
     vars := v1
     if v2 != "" {
         vars = v1 + ", " + v2
     }
-    return "for " + vars + " in " + exprText(x) + " {{" + stmtsText(body) + "}}}}"
+    return "for " + vars + " in " + exprText(x) + " {{" + stmtsText(body) + "}}"
 }
 
 func stmtsText(ss [Stmt]) string {
@@ -1038,9 +1061,9 @@ func stmtsText(ss [Stmt]) string {
 
 func declText(d Decl) string {
     return match d {
-    DFunc(name, tp, params, results, body) -> "func " + name + "(" + fieldsText(params) + ") (" + fieldsText(results) + ") {{" + stmtsText(body) + "}}}}"
-    DEnum(name, tp, variants) -> enumText(name, variants)
-    DStruct(name, tp, fields) -> "type " + name + " struct {{" + fieldsText(fields) + "}}}}"
+        DFunc(name, tp, params, results, body) -> "func " + name + "(" + fieldsText(params) + ") (" + fieldsText(results) + ") {{" + stmtsText(body) + "}}"
+        DEnum(name, tp, variants) -> enumText(name, variants)
+        DStruct(name, tp, fields) -> "type " + name + " struct {{" + fieldsText(fields) + "}}"
     }
 }
 
@@ -1049,7 +1072,7 @@ func enumText(name string, variants [Variant]) string {
     for v in variants {
         out = out + " " + v.Name + "(" + fieldsText(v.Fields) + ")"
     }
-    return out + " }}}}"
+    return out + " }}"
 }
 
 // ---------- main ----------
@@ -1062,14 +1085,14 @@ func main() {
     }
     r := os.ReadFile(args[1])
     match r {
-    Ok(src) -> {
-        toks := lex(src)
-        p := Parser{toks: toks, pos: 0}
-        decls := parseDecls(&p)
-        for d in decls {
-            println(declText(d))
+        Ok(src) -> {
+            toks := lex(src)
+            p := Parser{toks: toks, pos: 0}
+            decls := parseDecls(&p)
+            for d in decls {
+                println(declText(d))
+            }
         }
-    }
-    Err(e) -> println("goparse:", e)
+        Err(e) -> println("goparse:", e)
     }
 }

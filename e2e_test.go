@@ -477,3 +477,35 @@ func TestGoplexProgram(t *testing.T) {
 		t.Fatalf("goplex output:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestGoparseProgram runs the go++-written parser (programs/goparse)
+// on a fixture and compares the AST dump — self-hosting milestone 2.
+func TestGoparseProgram(t *testing.T) {
+	fixture := "package main\n\nfunc double(n int) int {\n    return n * 2\n}\n\nfunc main() {\n    println(double(21), double(21) > 40)\n}\n"
+	root := loadGraph("programs/goparse")
+	checkGraph(root)
+	if graphHasErrors(root) {
+		for _, p := range topoOrder(root) {
+			if len(p.diags.items) > 0 {
+				t.Logf("# %s\n%s", p.dir, p.diags.Render(p.src))
+			}
+		}
+		t.Fatal("checkGraph failed")
+	}
+	out := t.TempDir()
+	emitGraph(root, out)
+	path := filepath.Join(out, "parseme.gopp")
+	if err := os.WriteFile(path, []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "run", ".", path)
+	cmd.Dir = out
+	got, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("goparse failed: %v\n%s", err, got)
+	}
+	want := "func double(n int) (int) {return (* n 2);}\nfunc main() () {println(double(21), (> double(21) 40));}\n"
+	if string(got) != want {
+		t.Fatalf("goparse output:\n got %q\nwant %q", got, want)
+	}
+}

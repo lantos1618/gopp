@@ -43,6 +43,10 @@ func show(t Tok) string {
     }
 }
 
+func isOp2(t string) bool {
+    return t == "<<" || t == ">>" || t == "&^" || t == "==" || t == "!=" || t == "<=" || t == ">=" || t == "&&" || t == "||" || t == "<-" || t == "->" || t == "++" || t == "--" || t == ":=" || t == "+=" || t == "-=" || t == "*=" || t == "/=" || t == "%=" || t == "&=" || t == "|=" || t == "^="
+}
+
 func isOp1(c byte) bool {
     return contains("+-*/%&|^<>=!~()[]{{}},;.:@#?", string(rune(c)))
 }
@@ -124,7 +128,7 @@ func next(l *Lexer) Tok {
         }
         if l.i+2 <= len(l.src) {
             t := l.src[l.i : l.i+2]
-            if contains("<< >> &^ == != <= >= && || <- -> ++ -- := += -= *= /= %= &= |= ^=", t) {
+            if isOp2(t) {
                 l.i = l.i + 2
                 return Op(t)
             }

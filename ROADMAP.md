@@ -67,7 +67,7 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
 
 ## Next up, in dependency order
 
-- ~~generic structs~~ ✅ · ~~chan<T> syntax~~ ✅ · ~~[T] slice syntax~~ ✅ · ~~multiple results~~ ✅ · ~~actors (Pony)~~ ✅ · ~~goplex~~ ✅
+- ~~generic structs~~ ✅ · ~~chan<T> syntax~~ ✅ · ~~[T] slice syntax~~ ✅ · ~~multiple results~~ ✅ · ~~actors (Pony)~~ ✅ · ~~goplex~~ ✅ · ~~goparse~~ ✅
 
 1. ~~Parser recovery~~ ✅ · ~~Structs~~ ✅ · ~~`?` try~~ ✅ ·
    ~~better types~~ ✅ · ~~`comptime` expr (§10)~~ ✅ ·

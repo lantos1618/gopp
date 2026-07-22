@@ -1351,6 +1351,9 @@ func (c *checker) checkEnumCycles(f *File) {
 
 func (c *checker) enumCycle(root, cur *EnumDecl, visiting map[*EnumDecl]bool, done map[*EnumDecl]bool) {
 	if visiting[cur] {
+		if done[cur] {
+			return // already reported on this path
+		}
 		c.diag.errorf(root.Line, "recursive type has infinite size: %s contains itself (insert indirection, e.g. *%s)", root.Name, cur.Name)
 		for e := range visiting {
 			done[e] = true
@@ -2654,7 +2657,22 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 				c.diag.errorfAt(ex.Line, ex.Col, "append needs arguments")
 				return terr
 			}
-			return c.checkExpr(ex.Args[0])
+			st := c.checkExpr(ex.Args[0])
+			if sl, ok := st.(*tSlice); ok {
+				// elements are checked against the element type —
+				// otherwise ctor calls inside append go unresolved
+				for _, a := range ex.Args[1:] {
+					c.checkAgainst(a, sl.elem)
+				}
+				return st
+			}
+			if !isErr(st) {
+				c.diag.errorfAt(lineOf(ex.Args[0]), colOf(ex.Args[0]), "append needs a slice, got %s", st)
+			}
+			for _, a := range ex.Args[1:] {
+				c.checkExpr(a)
+			}
+			return terr
 		}
 		if basicTypes[fun.Name] {
 			// a type name in call position is an explicit conversion (§7) —
