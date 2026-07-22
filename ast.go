@@ -335,6 +335,14 @@ type FieldVal struct {
 	Col   int
 }
 
+// SliceLitExpr is a slice literal: []int{1, 2, 3} or []int{}.
+type SliceLitExpr struct {
+	Elem   TypeExpr
+	Values []Expr
+	Line   int // the [ position
+	Col    int
+}
+
 // TryExpr is `expr?` — the try operator (spec §7). It is only valid as
 // the direct right-hand side of an assignment, var initializer, or as an
 // expression statement: the operand must be Result[T, E] and the
@@ -375,6 +383,7 @@ func (*IndexExpr) exprNode()     {}
 func (*MakeChanExpr) exprNode()  {}
 func (*MatchExpr) exprNode()     {}
 func (*StructLitExpr) exprNode() {}
+func (*SliceLitExpr) exprNode()  {}
 func (*TryExpr) exprNode()       {}
 func (*ComptimeExpr) exprNode()  {}
 

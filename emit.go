@@ -701,6 +701,12 @@ func (e *emitter) expr(x Expr) string {
 			}
 		}
 		return e.typeExprGo(ex.Type) + "{" + strings.Join(parts, ", ") + "}"
+	case *SliceLitExpr:
+		parts := make([]string, len(ex.Values))
+		for i, v := range ex.Values {
+			parts[i] = e.expr(v)
+		}
+		return "[]" + e.typeExprGo(ex.Elem) + "{" + strings.Join(parts, ", ") + "}"
 	}
 	return "/* unhandled expr */"
 }
@@ -1071,6 +1077,10 @@ func renameExpr(x Expr, from, to string) {
 		}
 	case *ComptimeExpr:
 		renameExpr(ex.X, from, to)
+	case *SliceLitExpr:
+		for _, v := range ex.Values {
+			renameExpr(v, from, to)
+		}
 	}
 }
 

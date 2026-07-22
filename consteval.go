@@ -85,6 +85,8 @@ func lineOf(e Expr) int {
 		return ex.Line
 	case *StructLitExpr:
 		return ex.Line
+	case *SliceLitExpr:
+		return ex.Line
 	case *MakeChanExpr:
 		return ex.Line
 	case *TryExpr:
@@ -116,6 +118,8 @@ func colOf(e Expr) int {
 	case *MatchExpr:
 		return ex.Col
 	case *StructLitExpr:
+		return ex.Col
+	case *SliceLitExpr:
 		return ex.Col
 	case *MakeChanExpr:
 		return ex.Col

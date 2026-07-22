@@ -997,7 +997,42 @@ func (p *parser) parsePrimary() Expr {
 		e := p.parseExpr(1)
 		p.expect(")")
 		return e
+	case tk.text == "[":
+		// a [ at expression start can only open a slice literal — an
+		// index expression needs a leading operand
+		return p.parseSliceLit()
 	}
 	p.errorft(tk, "expected expression, got %q", tk.text)
 	return nil
+}
+
+// parseSliceLit parses `[]T{v, ...}` — the `[]` is unambiguous at
+// expression start. Values are positional only (cf. parseStructLit).
+func (p *parser) parseSliceLit() Expr {
+	line := p.cur().line
+	col := p.cur().col
+	p.next() // [
+	p.expect("]")
+	elem := p.parseType()
+	if p.cur().text != "{" {
+		p.errorf(line, "slice literal []T needs {values}")
+	}
+	p.next() // {
+	var values []Expr
+	for {
+		p.skipNL()
+		if p.cur().text == "}" {
+			p.next()
+			break
+		}
+		values = append(values, p.parseExpr(1))
+		p.skipNL()
+		if p.cur().text == "," {
+			p.next()
+			continue
+		}
+		p.expect("}")
+		break
+	}
+	return &SliceLitExpr{Elem: elem, Values: values, Line: line, Col: col}
 }

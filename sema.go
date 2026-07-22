@@ -1858,6 +1858,16 @@ func (c *checker) checkExpr(e Expr) Type {
 		ty = defaultType(c.checkMatchWant(ex, nil))
 	case *StructLitExpr:
 		ty = c.checkStructLit(ex)
+	case *SliceLitExpr:
+		et := c.resolveType(ex.Elem)
+		if isErr(et) {
+			ty = terr
+		} else {
+			for _, v := range ex.Values {
+				c.checkAgainst(v, et)
+			}
+			ty = &tSlice{elem: et}
+		}
 	case *TryExpr:
 		c.diag.errorfAt(ex.Line, ex.Col, "? can only be used directly on the right side of := / = / var, or as a statement")
 		c.checkExpr(ex.X)

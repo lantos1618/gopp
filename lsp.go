@@ -1012,6 +1012,10 @@ func (w *astWalk) e(e Expr) {
 		for _, fv := range ex.Fields {
 			w.e(fv.Value)
 		}
+	case *SliceLitExpr:
+		for _, v := range ex.Values {
+			w.e(v)
+		}
 	case *TryExpr:
 		w.e(ex.X)
 	case *ComptimeExpr:
