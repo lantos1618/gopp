@@ -350,3 +350,35 @@ func TestEndToEndGenericStruct(t *testing.T) {
 		t.Fatalf("generic_struct.gopp output:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestGoppFormatterProgram runs the go++-written formatter (programs/gofmt)
+// on a messy fixture and requires byte-identical output to the compiler's
+// own Go formatter — the dogfooding equivalence proof.
+func TestGoppFormatterProgram(t *testing.T) {
+	messy := "package main\n\nfunc main() {\n    x := 5\n    match {\n    if x > 3 -> println(\"big\")\n    _ -> println(\"small\")\n    }\n        over := 1\n}\n"
+	root := loadGraph("programs/gofmt")
+	checkGraph(root)
+	if graphHasErrors(root) {
+		for _, p := range topoOrder(root) {
+			if len(p.diags.items) > 0 {
+				t.Logf("# %s\n%s", p.dir, p.diags.Render(p.src))
+			}
+		}
+		t.Fatal("checkGraph failed")
+	}
+	out := t.TempDir()
+	emitGraph(root, out)
+	fixture := filepath.Join(out, "messy.gopp")
+	if err := os.WriteFile(fixture, []byte(messy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "run", ".", fixture)
+	cmd.Dir = out
+	got, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("formatter program failed: %v\n%s", err, got)
+	}
+	if want := formatSource(messy); string(got) != want {
+		t.Fatalf("formatter mismatch:\n got %q\nwant %q", got, want)
+	}
+}

@@ -299,6 +299,7 @@ type checker struct {
 	curTypeParams []string          // §8: type params of the function being checked
 	curBounds     map[string]string // §8: behavior bounds of those params
 	loopDepth     int
+	inLoop        int // inside any loop (for continue legality)
 	// §8 behaviors: decls by name; impls/methods keyed by type name.
 	// methods[Type][Method] is the resolved signature (receiver dropped);
 	// one method name per type is the coherence rule (Go emission).
@@ -1378,6 +1379,7 @@ func (c *checker) checkStmt(s Stmt) {
 			return
 		}
 		c.child()
+		c.inLoop++
 		if st.Var2 != "" { // two vars: Var is index/key, Var2 the element
 			if st.Var != "_" {
 				c.cur.vars[st.Var] = key
@@ -1525,14 +1527,22 @@ func (c *checker) checkStmt(s Stmt) {
 		if st.Post != nil {
 			c.checkStmt(st.Post)
 		}
+		c.inLoop++
 		c.checkStmts(st.Body.List)
+		c.inLoop--
 		c.pop()
 	case *LoopStmt:
 		c.child()
 		c.loopDepth++
+		c.inLoop++
 		c.checkStmts(st.Body.List)
+		c.inLoop--
 		c.loopDepth--
 		c.pop()
+	case *ContinueStmt:
+		if c.inLoop == 0 {
+			c.diag.errorfAt(st.Line, st.Col, "continue outside of a loop")
+		}
 	case *BreakStmt:
 		if st.Label == "loop" {
 			if c.loopDepth == 0 {
@@ -2866,6 +2876,15 @@ func (c *checker) checkIndex(ex *IndexExpr) Type {
 			c.diag.errorfAt(ex.Line, ex.Col, "slice index must be a number, got %s", it)
 		}
 		return t.elem
+	case tBasic:
+		if xt == tstring {
+			// s[i] is a byte, like Go; bounds are the runtime's problem
+			it := c.checkExpr(ex.Index[0])
+			if !isErr(it) && !isNumeric(it) {
+				c.diag.errorfAt(ex.Line, ex.Col, "string index must be a number, got %s", it)
+			}
+			return tBasic{"byte"}
+		}
 	}
 	c.diag.errorfAt(ex.Line, ex.Col, "cannot index %s", xt)
 	return terr

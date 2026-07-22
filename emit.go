@@ -590,6 +590,8 @@ func (e *emitter) emitStmt(s Stmt) {
 		}
 		e.emitStmts(st.Body.List)
 		e.s("}\n")
+	case *ContinueStmt:
+		e.s("continue\n")
 	case *BreakStmt:
 		if st.Label == "loop" {
 			e.s("break %s\n", e.loops[len(e.loops)-1])

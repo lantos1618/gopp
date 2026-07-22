@@ -1,0 +1,110 @@
+package main
+
+// gofmt++ — the first real program written in go++: a canonical
+// formatter for go++ source. A brace-depth reindenter (like the
+// compiler's own `gopp fmt`): token-safe, comments and strings are
+// preserved, only leading whitespace and blank runs change.
+
+import "str"
+import "os"
+
+type Delta struct {
+    D       int // opens - closes on this line
+    Lead    int // leading closers (dedent before printing)
+    InBlock bool // inside a /* */ comment (carries across lines)
+}
+
+func delta(line string, inBlock bool) Delta {
+    opens := 0
+    closes := 0
+    lead := 0
+    leading := true
+    inStr := false
+    inChar := false
+    esc := false
+    i := 0
+    for i < len(line) {
+        c := line[i]
+        if esc {
+            esc = false
+        } else if inBlock {
+            if c == byte('*') && i+1 < len(line) && line[i+1] == byte('/') {
+                inBlock = false
+                i++
+            }
+        } else if c == byte('\\') && (inStr || inChar) {
+            esc = true
+        } else if inStr {
+            if c == byte('"') { inStr = false }
+        } else if inChar {
+            if c == byte('\'') { inChar = false }
+        } else if c == byte('/') && i+1 < len(line) && line[i+1] == byte('/') {
+            break // line comment: the rest is text
+        } else if c == byte('/') && i+1 < len(line) && line[i+1] == byte('*') {
+            inBlock = true
+            i++
+        } else if c == byte('"') {
+            inStr = true
+        } else if c == byte('\'') {
+            inChar = true
+        } else if c == byte('{') {
+            opens++
+            leading = false
+        } else if c == byte('}') {
+            closes++
+            if leading { lead++ }
+        } else if c != byte(' ') && c != byte('\t') {
+            leading = false
+        }
+        i++
+    }
+    return Delta{D: opens - closes, Lead: lead, InBlock: inBlock}
+}
+
+func gofmt(src string) string {
+    out := ""
+    depth := 0
+    inBlock := false
+    blank := false
+    lines := str.Split(src, "\n")
+    // drop trailing blank lines: exactly one final newline out
+    last := len(lines)
+    for last > 0 && str.Trim(lines[last-1]) == "" {
+        last--
+    }
+    for i, ln in lines {
+        if i >= last { break }
+        t := str.Trim(ln)
+        if t == "" {
+            if !blank {
+                out = out + "\n"
+            }
+            blank = true
+            continue
+        }
+        blank = false
+        d := delta(t, inBlock)
+        inBlock = d.InBlock
+        eff := depth - d.Lead
+        if eff < 0 { eff = 0 }
+        out = out + str.Repeat("    ", eff) + t + "\n"
+        depth = depth + d.D
+        if depth < 0 { depth = 0 }
+    }
+    return out
+}
+
+func main() {
+    args := os.Args()
+    if len(args) < 2 {
+        println("usage: gofmt++ <file.gopp>...")
+        os.Exit(2)
+    }
+    for i := 1; i < len(args); i++ {
+        r := os.ReadFile(args[i])
+        match r {
+            Ok(src) -> print(gofmt(src))
+            Err(e) -> println("gofmt++:", e)
+        }
+    }
+}

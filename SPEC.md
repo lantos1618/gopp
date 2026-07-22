@@ -278,8 +278,11 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   channel (receives until close) — Go range semantics. The two-variable
   form `for i, x in xs` binds index (slice) or key (map) first; channels
   yield values only.
-- `_` binds nothing. `break` works as in any loop. Comptime for-in is
-  unchanged (lists, single variable).
+- `_` binds nothing. `break` and `continue` work as in Go (`continue`
+  outside any loop is a sema error). Comptime for-in is unchanged
+  (lists, single variable).
+- Strings index as bytes: `s[i]` is a `byte` (Go semantics; bounds are
+  the runtime's problem).
 
 ## Flow (§9)
 

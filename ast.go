@@ -229,6 +229,11 @@ type ForInStmt struct {
 	Col  int
 }
 
+type ContinueStmt struct {
+	Line int
+	Col  int
+}
+
 type BreakStmt struct {
 	Label string // "" = plain break, "loop" = innermost go++ loop
 	Line  int
@@ -257,6 +262,7 @@ func (*ForStmt) stmtNode()    {}
 func (*ForInStmt) stmtNode()  {}
 func (*LoopStmt) stmtNode()   {}
 func (*BreakStmt) stmtNode()  {}
+func (*ContinueStmt) stmtNode() {}
 func (*ReturnStmt) stmtNode() {}
 func (*IncDecStmt) stmtNode() {}
 

@@ -68,7 +68,7 @@ func (c *checker) listDiverges(list []Stmt) bool {
 
 func (c *checker) stmtDiverges(s Stmt) bool {
 	switch st := s.(type) {
-	case *ReturnStmt:
+	case *ReturnStmt, *ContinueStmt:
 		return true
 	case *Block:
 		return c.listDiverges(st.List)
@@ -369,6 +369,8 @@ func stmtLine(s Stmt) int {
 	case *LoopStmt:
 		return st.Line
 	case *BreakStmt:
+		return st.Line
+	case *ContinueStmt:
 		return st.Line
 	case *ReturnStmt:
 		return st.Line
