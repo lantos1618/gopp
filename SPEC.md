@@ -202,6 +202,10 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - `println`/`print` are prelude helpers, not Go's builtin println:
   real stdout and `%v` formatting (Go's builtin writes to stderr and
   prints floats as exponents).
+- Language string builtins work at runtime AND comptime with the same
+  names: `has_prefix`, `has_suffix`, `contains`, `replace`, `split`,
+  `join`, `upper`, `lower`, `trim`, `repeat` (prelude-lowered; the
+  `str` package's CamelCase forms remain for qualified use).
 
 ## Map literals
 

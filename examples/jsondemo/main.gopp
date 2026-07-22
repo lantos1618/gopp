@@ -1,8 +1,9 @@
 package main
 
 // json.Marshal without reflection: a comptime block walks the package's
-// structs and GENERATES a marshaler per type. This is the go++ answer
-// to Go's encoding/json — no any, no reflect, full type safety.
+// structs and GENERATES a marshaler per type — scalars, nested structs
+// (calls the nested marshaler), and slices (generates the loop). This
+// is the go++ answer to Go's encoding/json: no any, no reflect.
 
 import "json"
 import "conv"
@@ -18,33 +19,68 @@ type Point struct {
     Y int
 }
 
-// emitField builds the marshaling expression for one struct field,
-// dispatched on its type — a comptime function called at compile time.
-func emitField(t string, name string) string {
-    if t == "string" { return "json.Quote(v." + name + ")" }
-    if t == "int" { return "conv.Itoa(v." + name + ")" }
-    if t == "bool" { return "json.Bool(v." + name + ")" }
-    if t == "float64" { return "json.Float(v." + name + ")" }
-    return "\"<" + t + ">\""
+type Team struct {
+    Name    string
+    Lead    User
+    Scores  [int]
+    Members [string]
+}
+
+// emitField builds the marshaling expression for one field, dispatched
+// on its type — a comptime function called at compile time.
+func emitField(t string, access string) string {
+    if t == "string" { return "json.Quote(" + access + ")" }
+    if t == "int" { return "conv.Itoa(" + access + ")" }
+    if t == "bool" { return "json.Bool(" + access + ")" }
+    if t == "float64" { return "json.Float(" + access + ")" }
+    // anything else is a struct: call its generated marshaler
+    return "Marshal" + t + "(" + access + ")"
+}
+
+func isSlice(t string) bool {
+    return has_prefix(t, "[") && has_suffix(t, "]")
+}
+
+func elemType(t string) string {
+    return replace(replace(t, "[", ""), "]", "")
+}
+
+// sliceLoop generates the accumulation loop for a slice field. Braces
+// are escaped once ({{ }}): they are CODE braces in the generated
+// source, unlike the quadruple-escaped braces inside generated strings.
+func sliceLoop(parts string, name string, elemT string) string {
+    pre := "for j, e in v." + name + " {{\n"
+    pre = pre + "    if j > 0 {{ " + parts + " = " + parts + " + \", \" }}\n"
+    pre = pre + "    " + parts + " = " + parts + " + " + emitField(elemT, "e") + "\n}}\n"
+    return parts + " := \"\"\n" + pre
 }
 
 comptime {
     for d in decls() {
         if d.kind == "struct" {
-            body := "return \"{{{{\""
+            pre := ""
+            ret := "return \"{{{{\"" // -> "{" in generated code
             first := true
+            n := 0
             for f in d.fields {
                 if !first {
-                    body = body + " + \", \""
+                    ret = ret + " + \", \""
                 }
                 first = false
-                body = body + " + \"\\\"" + f.name + "\\\": \" + " + emitField(f.type, f.name)
+                if isSlice(f.type) {
+                    parts := "parts" + str(n)
+                    n++
+                    pre = pre + sliceLoop(parts, f.name, elemType(f.type))
+                    ret = ret + " + \"\\\"" + f.name + "\\\": [\" + " + parts + " + \"]\""
+                } else {
+                    ret = ret + " + \"\\\"" + f.name + "\\\": \" + " + emitField(f.type, "v." + f.name)
+                }
             }
-            body = body + " + \"}}}}\""
+            ret = ret + " + \"}}}}\"" // -> "}" in generated code
             fn := Func("Marshal" + d.name)
             fn.params.add(Param("v", d))
             fn.results.add(Param("", "string"))
-            fn.body = body
+            fn.body = pre + ret
             gen(fn)
             print("generated Marshal" + d.name)
         }
@@ -56,6 +92,8 @@ func main() {
     println(MarshalUser(u))
     p := Point{X: 3, Y: -4}
     println(MarshalPoint(p))
-    var z User
-    println(MarshalUser(z))
+    t := Team{Name: "core", Lead: u, Scores: [int]{7, 8}, Members: [string]{"ada", "grace"}}
+    println(MarshalTeam(t))
+    var z Team
+    println(MarshalTeam(z))
 }

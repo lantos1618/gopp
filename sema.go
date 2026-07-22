@@ -2212,6 +2212,55 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 			}
 			c.expect(bt, at, lineOf(ex.Args[1]), colOf(ex.Args[1]))
 			return tvoid
+		// language string builtins (prelude gopp.*; same names at comptime)
+		case "has_prefix", "has_suffix", "contains":
+			if len(ex.Args) != 2 {
+				c.diag.errorfAt(ex.Line, ex.Col, "%s takes 2 arguments", fun.Name)
+				return terr
+			}
+			c.checkAgainst(ex.Args[0], tstring)
+			c.checkAgainst(ex.Args[1], tstring)
+			return tbool
+		case "replace":
+			if len(ex.Args) != 3 {
+				c.diag.errorfAt(ex.Line, ex.Col, "replace takes 3 arguments")
+				return terr
+			}
+			for _, a := range ex.Args {
+				c.checkAgainst(a, tstring)
+			}
+			return tstring
+		case "split":
+			if len(ex.Args) != 2 {
+				c.diag.errorfAt(ex.Line, ex.Col, "split takes 2 arguments")
+				return terr
+			}
+			c.checkAgainst(ex.Args[0], tstring)
+			c.checkAgainst(ex.Args[1], tstring)
+			return &tSlice{elem: tstring}
+		case "join":
+			if len(ex.Args) != 2 {
+				c.diag.errorfAt(ex.Line, ex.Col, "join takes 2 arguments")
+				return terr
+			}
+			c.checkAgainst(ex.Args[0], &tSlice{elem: tstring})
+			c.checkAgainst(ex.Args[1], tstring)
+			return tstring
+		case "upper", "lower", "trim":
+			if len(ex.Args) != 1 {
+				c.diag.errorfAt(ex.Line, ex.Col, "%s takes 1 argument", fun.Name)
+				return terr
+			}
+			c.checkAgainst(ex.Args[0], tstring)
+			return tstring
+		case "repeat":
+			if len(ex.Args) != 2 {
+				c.diag.errorfAt(ex.Line, ex.Col, "repeat takes 2 arguments")
+				return terr
+			}
+			c.checkAgainst(ex.Args[0], tstring)
+			c.checkAgainst(ex.Args[1], tint)
+			return tstring
 		case "panic":
 			for _, a := range ex.Args {
 				c.checkExpr(a)

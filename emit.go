@@ -891,6 +891,17 @@ func (e *emitter) call(ex *CallExpr) string {
 			e.needGopp = true
 			return "gopp.AssertEq(" + argStr + ")"
 		}
+		// language string builtins lower to the gopp prelude
+		switch fun.Name {
+		case "has_prefix", "has_suffix", "contains", "replace", "split", "join",
+			"upper", "lower", "trim", "repeat":
+			e.needGopp = true
+			parts := strings.Split(fun.Name, "_")
+			for i, p := range parts {
+				parts[i] = strings.ToUpper(p[:1]) + p[1:]
+			}
+			return "gopp." + strings.Join(parts, "") + "(" + argStr + ")"
+		}
 		return fun.Name + "(" + argStr + ")"
 	default:
 		return e.expr(ex.Fun) + "(" + argStr + ")"

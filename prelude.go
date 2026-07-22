@@ -36,6 +36,21 @@ func Str(parts ...any) string {
 	return b.String()
 }
 
+// language string builtins — the same names work at comptime (meta.go)
+// and at runtime (these), like Zig's std functions.
+func HasPrefix(s string, p string) bool { return strings.HasPrefix(s, p) }
+func HasSuffix(s string, p string) bool { return strings.HasSuffix(s, p) }
+func Contains(s string, sub string) bool { return strings.Contains(s, sub) }
+func Replace(s string, old string, replacement string) string {
+	return strings.ReplaceAll(s, old, replacement)
+}
+func Split(s string, sep string) []string      { return strings.Split(s, sep) }
+func Join(parts []string, sep string) string   { return strings.Join(parts, sep) }
+func Upper(s string) string                    { return strings.ToUpper(s) }
+func Lower(s string) string                    { return strings.ToLower(s) }
+func Trim(s string) string                     { return strings.TrimSpace(s) }
+func Repeat(s string, n int) string            { return strings.Repeat(s, n) }
+
 // test assertions (gopp test): panic on failure, the runner recovers.
 func Assert(cond bool) {
 	if !cond {
