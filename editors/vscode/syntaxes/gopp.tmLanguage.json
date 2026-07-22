@@ -1,0 +1,179 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "go++",
+  "scopeName": "source.gopp",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#runes" },
+    { "include": "#keywords" },
+    { "include": "#storage-types" },
+    { "include": "#constants" },
+    { "include": "#builtins" },
+    { "include": "#constructors" },
+    { "include": "#numbers" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.gopp",
+          "begin": "/\\*",
+          "end": "\\*/"
+        },
+        {
+          "name": "comment.line.double-slash.gopp",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.gopp",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.gopp",
+          "match": "\\\\(\\\\|\"|'|n|t|r|0|a|b|f|v|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})"
+        },
+        {
+          "name": "invalid.illegal.escape.gopp",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "runes": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.gopp",
+          "match": "'(?:\\\\(?:\\\\|'|n|t|r|0|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4})|[^'\\\\])'"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.gopp",
+          "match": "\\b(if|else|match|loop|for|in|return|break)\\b"
+        },
+        {
+          "name": "keyword.other.gopp",
+          "match": "\\b(package|import)\\b"
+        },
+        {
+          "name": "storage.type.function.gopp",
+          "match": "\\b(func|fn)\\b"
+        },
+        {
+          "name": "storage.modifier.gopp",
+          "match": "\\b(comptime|native)\\b"
+        },
+        {
+          "name": "keyword.declaration.gopp",
+          "match": "\\b(enum|type|behavior|impl)\\b"
+        }
+      ]
+    },
+    "storage-types": {
+      "patterns": [
+        {
+          "name": "storage.type.gopp",
+          "match": "\\b(int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|uintptr|byte|rune|string|bool|float32|float64|duration|map|chan)\\b"
+        },
+        {
+          "name": "support.type.prelude.gopp",
+          "match": "\\b(Result|Option)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.gopp",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.prelude.gopp",
+          "match": "\\b(ms|second|minute)\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.gopp",
+          "match": "\\b(println|print|panic|len|cap|append)\\b"
+        }
+      ]
+    },
+    "constructors": {
+      "patterns": [
+        {
+          "name": "constant.language.variant.gopp",
+          "match": "\\b(Ok|Err|Some|None)\\b"
+        },
+        {
+          "name": "entity.name.type.gopp",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.gopp",
+          "match": "\\b0x[0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.gopp",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.gopp",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.gopp",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.assignment.gopp",
+          "match": ":="
+        },
+        {
+          "name": "keyword.operator.channel.gopp",
+          "match": "<-"
+        },
+        {
+          "name": "keyword.operator.try.gopp",
+          "match": "\\?"
+        },
+        {
+          "name": "keyword.operator.comparison.gopp",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.logical.gopp",
+          "match": "(&&|\\|\\||!)"
+        },
+        {
+          "name": "keyword.operator.assignment.gopp",
+          "match": "(\\+=|-=|\\*=|/=|%=|=)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.gopp",
+          "match": "(\\+\\+|--|\\+|-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.operator.bitwise.gopp",
+          "match": "(<<|>>|&|\\||\\^)"
+        }
+      ]
+    }
+  }
+}
