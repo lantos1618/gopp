@@ -9,7 +9,7 @@ func main() {
     println("n = {n}, n+1 = {n + 1}")
     println("float: {3.5}, bool: {n > 0}")
     println("literal braces: {{}}")
-    xs := []int{1, 2}
+    xs := [int]{1, 2}
     println("len: {len(xs)}, first: {xs[0]}")
     p := Point{X: 3}
     println("field: {p.X}")

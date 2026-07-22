@@ -37,8 +37,8 @@ func HasPrefix(s string, p string) bool = native
 func HasSuffix(s string, p string) bool = native
 func Replace(s string, old string, replacement string) string = native
 func Repeat(s string, n int) string = native
-func Split(s string, sep string) []string = native
-func Join(parts []string, sep string) string = native
+func Split(s string, sep string) [string] = native
+func Join(parts [string], sep string) string = native
 `
 
 const strGo = `package str
@@ -121,7 +121,7 @@ const osGopp = `package os
 // Operating-system interaction. Failures are Result values, never
 // silently dropped.
 
-func Args() []string = native
+func Args() [string] = native
 func Getenv(key string) string = native
 func Exit(code int) = native
 func ReadFile(path string) Result[string, string] = native
@@ -190,10 +190,10 @@ const sortGopp = `package sort
 
 // Sorting slices in place.
 
-func Ints(xs []int) = native
-func Floats(xs []float64) = native
-func Strings(xs []string) = native
-func IntsDesc(xs []int) = native
+func Ints(xs [int]) = native
+func Floats(xs [float64]) = native
+func Strings(xs [string]) = native
+func IntsDesc(xs [int]) = native
 `
 
 const sortGo = `package sort
@@ -212,7 +212,7 @@ const randGopp = `package rand
 
 func Intn(n int) int = native
 func Float64() float64 = native
-func Shuffle(xs []int) = native
+func Shuffle(xs [int]) = native
 `
 
 const randGo = `package rand
@@ -228,7 +228,7 @@ const filepathGopp = `package filepath
 
 // Filesystem path manipulation, backed by Go's path/filepath.
 
-func Join(parts []string) string = native
+func Join(parts [string]) string = native
 func Base(path string) string = native
 func Dir(path string) string = native
 func Ext(path string) string = native

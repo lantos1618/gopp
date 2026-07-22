@@ -58,7 +58,7 @@ func more() {
     time.Sleep(1 * ms)
     println("slept")
     println(time.Unix() > 1000000)
-    var xs []int
+    var xs [int]
     xs = append(xs, 5)
     xs = append(xs, 2)
     xs = append(xs, 8)

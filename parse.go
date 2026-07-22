@@ -510,8 +510,12 @@ func (p *parser) parseType() TypeExpr {
 		return &ChanType{Elem: e, Line: line, Col: col}
 	case "[":
 		p.next()
+		if p.cur().text == "]" { // Go's []T — rejected with guidance
+			p.errorft(p.cur(), "slice types are written [T] (e.g. [int])")
+		}
+		elem := p.parseType()
 		p.expect("]")
-		return &SliceType{Elem: p.parseType(), Line: line, Col: col}
+		return &SliceType{Elem: elem, Line: line, Col: col}
 	case "*":
 		p.next()
 		return &StarType{X: p.parseType(), Line: line, Col: col}
@@ -1179,16 +1183,19 @@ func (p *parser) parsePrimary() Expr {
 	return nil
 }
 
-// parseSliceLit parses `[]T{v, ...}` — the `[]` is unambiguous at
+// parseSliceLit parses `[T]{v, ...}` — the `[` is unambiguous at
 // expression start. Values are positional only (cf. parseStructLit).
 func (p *parser) parseSliceLit() Expr {
 	line := p.cur().line
 	col := p.cur().col
 	p.next() // [
-	p.expect("]")
+	if p.cur().text == "]" { // Go's []T — rejected with guidance
+		p.errorft(p.cur(), "slice types are written [T] (e.g. [int])")
+	}
 	elem := p.parseType()
+	p.expect("]")
 	if p.cur().text != "{" {
-		p.errorf(line, "slice literal []T needs {values}")
+		p.errorf(line, "slice literal [T] needs {values}")
 	}
 	p.next() // {
 	var values []Expr

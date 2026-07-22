@@ -1,0 +1,10 @@
+package main
+
+// Go's []T is rejected with guidance.
+
+func main() {
+    var xs []int //~ ERROR slice types are written [T] (e.g. [int])
+    _ = xs
+    ys := []int{1, 2} //~ ERROR slice types are written [T] (e.g. [int])
+    _ = ys //~ ERROR expected declaration
+}

@@ -1,7 +1,7 @@
 package main
 func main() {
-    ys := []int //~ ERROR slice literal []T needs {values}
+    ys := [int] //~ ERROR slice literal [T] needs {values}
     println(ys)
-    ws := []int{1, 2
+    ws := [int]{1, 2
         println(ws) //~ ERROR expected "}", got "println"
     }

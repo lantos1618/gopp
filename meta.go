@@ -123,7 +123,7 @@ func typeExprString(te TypeExpr) string {
 	case *ChanType:
 		return "chan<" + typeExprString(t.Elem) + ">"
 	case *SliceType:
-		return "[]" + typeExprString(t.Elem)
+		return "[" + typeExprString(t.Elem) + "]"
 	case *StarType:
 		return "*" + typeExprString(t.X)
 	}

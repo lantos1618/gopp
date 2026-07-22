@@ -70,7 +70,7 @@ func (t *tChan) String() string { return "chan<" + t.elem.String() + ">" }
 
 type tSlice struct{ elem Type }
 
-func (t *tSlice) String() string { return "[]" + t.elem.String() }
+func (t *tSlice) String() string { return "[" + t.elem.String() + "]" }
 
 type tStar struct{ x Type }
 

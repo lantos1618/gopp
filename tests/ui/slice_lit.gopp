@@ -1,7 +1,7 @@
 package main
 func main() {
-    xs := []int{1, "two", 3} //~ ERROR expected int, found string
+    xs := [int]{1, "two", 3} //~ ERROR expected int, found string
     println(xs)
-    zs := []nope{1} //~ ERROR undefined type nope
+    zs := [nope]{1} //~ ERROR undefined type nope
     println(zs)
 }

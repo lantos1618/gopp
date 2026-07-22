@@ -171,6 +171,15 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   end (§7), so `Ok(1)` against `Result[int64, string]` solves T=int64
   and the literal still gets its overflow check.
 
+## Type syntax (go++ vs Go)
+
+- Maps: `map<K, V>` — `map[string]int` is a migration error.
+- Channels: `chan<T>` and `chan<T>(cap)` — `chan[int]` is a migration
+  error.
+- Slices: `[T]` — `[]T` is a migration error.
+- Generic instantiations keep square brackets: `Result[int, string]`,
+  `Pair[int]`.
+
 ## Standard library & native FFI
 
 - `import "str"` / `import "conv"` name no directory on disk, so the
@@ -215,9 +224,10 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 
 ## Slice literals
 
-- `[]int{1, 2, 3}`, `[]int{}` — element values are checked against the
-  element type with the usual literal adoption; empty literals are
-  typed by the declared element. Nesting works (`[][]int{[]int{1}}`),
+- Slice types are `[T]` (not Go's `[]T`); literals: `[int]{1, 2, 3}`,
+  `[int]{}`. Element values are checked against the element type with
+  the usual literal adoption; empty literals are typed by the declared
+  element. Nesting works (`[[int]]{[int]{1}}`),
   as does generic inference through literals. Not comptime expressions.
 
 ## Scopes & names (§3)

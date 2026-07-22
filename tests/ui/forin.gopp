@@ -11,7 +11,7 @@ func main() {
     for i, v in ch { //~ ERROR ranging over chan<int> yields values only (no index/key)
         println(i, v)
     }
-    xs := []string{"a"}
+    xs := [string]{"a"}
     for s in xs {
         bad := s + 1 //~ ERROR invalid operation: string + untyped int (mismatched types)
         _ = bad
