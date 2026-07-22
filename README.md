@@ -1,150 +1,147 @@
 # go++
 
-go++ is a strict-typed Go derivative that transpiles to Go. It keeps Go's
-runtime, toolchain, and concurrency model, and deletes the footguns at the
-language level:
+go++ is a strict-typed language that transpiles to Go. It keeps Go's
+runtime and toolchain, deletes Go's footguns, and adds the things Go
+won't: sum types, generics done sanely, traits, comptime
+metaprogramming, and Pony-style actors. The output is a plain Go
+module you can read, vet, race-check, and debug with delve.
 
-- **Sum types with exhaustiveness checking.** `enum` with payloads and
-  generics; `match` must cover every variant or it doesn't compile.
-- **`Result[T, E]` instead of `error` returns.** `error` is not a type in
-  go++. Failures are values, propagated with `?`, handled with `match`.
-- **No nil maps.** `var m map<K, V>` emits `make(...)` — a declared map is
-  always ready to write.
-- **No implicit conversions.** `int8 + int64` is a compile error;
-  conversions are explicit (`int64(x)`). Numeric literals are untyped
-  constants with compile-time overflow checks.
-- **No `<-` operator.** Channels are used through methods:
-  `ch.send(v)`, `ch.recv()`, `ch.close()`; `match` without a subject is
-  the select.
-- **Comptime metaprogramming.** `comptime expr` folds constants; top-level
-  `comptime { }` blocks walk and rewrite the package's declarations before
-  type checking runs.
+```
+package main
 
-The output is a plain Go module — no runtime, no codegen magic you can't
-read.
+enum Status {
+    Active
+    Banned(reason string)
+}
+
+actor Counter {
+    count int                       // private state
+
+    be Add(n int) {                 // async behavior — a message, not a call
+        count = count + n
+    }
+}
+
+func describe(s Status) string {
+    return match s {                // exhaustiveness-checked, or it doesn't compile
+    Active -> "active"
+    Banned(r) -> "banned: {r}"      // string interpolation
+    }
+}
+
+func main() {
+    c := Counter{}                  // spawns the actor (compiler's `go`, never yours)
+    c.Add(42)
+    println(describe(Banned("spam")))
+}
+```
+
+## Why
+
+Go's ergonomics, minus its worst ideas:
+
+- **Sum types with exhaustiveness.** `enum` with payloads and generics;
+  `match` must cover every variant. `Result[T, E]` and `Option[T]` are
+  in the prelude — `error` and `nil` maps are not in the language.
+- **`?` instead of `if err != nil`.** Failures are values, propagated
+  with `?`, handled with `match`.
+- **Strict numerics.** `int8 + int64` is a compile error; conversions
+  are explicit. Untyped literals with compile-time overflow checks.
+- **Real generics.** `func Identity[T](x T) T`, `enum Box[T]`,
+  `type Pair[T] struct` — checked once, rigidly, inferred at call
+  sites. Emitted as Go generics.
+- **Behaviors (traits).** `behavior`/`impl`/bounds, default methods,
+  operator overloading (`impl Add for Vec2` makes `a + b` work),
+  `index`/`set` for custom containers.
+- **Comptime metaprogramming.** Top-level `comptime { }` blocks walk,
+  use, and rewrite the package's own declarations before checking —
+  generate functions, mutate signatures, call declared functions at
+  compile time. `comptime embed("file")` bakes files into the binary.
+- **Actors.** Pony-style concurrency: private state, async behaviors,
+  sequential execution per actor, sendability checked at the boundary
+  (no pointers, maps, or slices cross actors). No goroutine keyword.
+- **Type syntax that reads well.** `map<K, V>`, `chan<T>`, `[T]`,
+  `Pair[int]` — not Go's bracket soup.
 
 ## Quick start
 
 Requires Go 1.23+.
 
 ```
+git clone https://github.com/lantos1618/gopp
+cd gopp
 go build -o gopp .
-./gopp examples/hello.gopp && cd gopp-out && go run .
+
+./gopp run examples/hello.gopp          # compile + run in one step
+./gopp build examples/hello.gopp -o hello && ./hello
+./gopp test examples/testdemo           # run *_test.gopp files
+./gopp fmt -w examples/                 # canonical formatting
+./gopp lsp                              # language server (VS Code below)
+./gopp play                             # browser playground at :8585
 ```
 
-or in one step:
+## A tour
 
-```
-./gopp run examples/hello.gopp
-```
+**Errors are values.** `func fetch(id int) Result[User, string]` with
+`?` propagation and `r.IsOk()` / `match` handling. The `error` type,
+`any`, and bare `<-` don't exist.
 
-`gopp run` compiles to a temp dir and runs it via `go run .`, streaming
-stdout/stderr and propagating the exit code. It needs `go` on PATH.
+**Strict by default.** No implicit conversions, no nil maps (declared
+maps are made, always), no uninitialized anything that matters —
+except deliberate zero values, which are honest.
 
-## Feature tour
+**Channels without `<-`.** `ch.send(v)`, `ch.recv()`, `ch.close()`;
+`match { v := ch.recv() -> ..., after(1 * second) -> ... }` is select.
+Range loops over slices, maps, and channels: `for x in xs { }`.
 
-Sum types + exhaustive match (from `examples/hello.gopp`):
+**Comptime.** `comptime 1 << 20` folds at compile time. Top-level
+`comptime { }` blocks metaprogram: `for d in decls() { ... }` with live
+handles — rename functions, add parameters, generate whole types.
+`examples/jsondemo` generates per-struct JSON marshal/unmarshal this
+way — Go's `encoding/json` without `any` or reflection.
 
-```go
-enum Status {
-    Pending
-    Active
-    Failed(reason string)
-}
+**Actors.** `actor` + `be` — private state, async behaviors, messages
+checked sendable. Pony's rule simplified: nothing deep-mutable crosses.
 
-match s {
-    Pending -> println("waiting...")
-    Active -> println("live")
-    Failed(reason) -> println("dead: " + reason)
-}
-```
+**Self-hosted programs.** The formatter (`programs/gofmt`) and the
+lexer (`programs/goplex`) are written in go++ itself.
 
-Leave out an arm and the compiler tells you. Guards never count toward
-coverage, and shadowed arms are `unreachable pattern` warnings.
+## Standard library
 
-`Result` and `?` (from `examples/try.gopp`):
+`str` `conv` `math` `os` `time` `sort` `rand` `filepath` `json` —
+declared in go++, implemented natively via `= native` FFI where needed.
+`json` includes a pure-go++ parser; struct codecs are comptime-generated.
 
-```go
-func build(id int) Result[int, string] {
-    u := fetchUser(id)?
-    p := fetchPerms(u)?
-    return Ok[int, string](u + p)
-}
-```
-
-`?` desugars to the nested match propagation; a function that can fail
-says so in its return type. Type arguments infer from context:
-`var r Result[int, string] = Ok(1)`.
-
-Channels + match-as-select, and maps that can't be nil (from
-`examples/features.gopp`):
-
-```go
-ch := chan<int>(1)
-ch.send(42)
-got := match {
-    v := ch.recv() -> v
-    after(1 * second) -> -1
-}
-
-var scores map<string, int>
-scores["alice"] = 90 // no nil-map panic
-```
-
-Comptime metaprogramming (from `examples/meta.gopp`) — blocks run during
-sema, before any name resolution, so what they mutate is what checking and
-codegen see:
-
-```go
-comptime {
-    for d in decls() {
-        if d.kind == "enum" && d.name == "Color" {
-            d.variants.add(Variant("Neon")) // matches must now cover Neon
-        }
-    }
-    n := fib(10) // declared functions are callable at comptime
-    f := Func("fib10")
-    f.results.add(Param("", "int"))
-    f.body = "return " + str(n)
-    gen(f) // inject a new function into the package
-}
-```
-
-Packages are directories (see `examples/imports/`): `import "geom"` loads
-`./geom`; the qualifier is the dependency's package name; capitalized =
-exported; cycles are errors.
+Language string builtins work at runtime and comptime with the same
+names: `contains`, `has_prefix`, `has_suffix`, `replace`, `split`,
+`join`, `upper`, `lower`, `trim`, `repeat`.
 
 ## Tooling
 
-```
-gopp <input.gopp> [-o outdir]   compile to a Go module (default ./gopp-out)
-gopp run <input.gopp>           compile to a temp dir and run it
-gopp fmt [-w] <files...>        reformat go++ source (-w writes in place)
-```
+| command | what it does |
+|---|---|
+| `gopp <file.gopp> [-o dir]` | compile to a Go module |
+| `gopp run <file.gopp>` | compile + run |
+| `gopp build <file.gopp> [-o bin]` | compile to a binary |
+| `gopp test [dir]` | run `*_test.gopp` (`assert`, `assertEq`) |
+| `gopp fmt [-w] <files>` | canonical formatter (idempotent) |
+| `gopp lsp` | language server: diagnostics, hover, defs, completion |
+| `gopp play` | WASM playground in the browser |
 
-The emitted code is ordinary Go in an ordinary module, so the whole Go
-toolchain works on it. To check a program under the race detector:
-
-```
-./gopp examples/hello.gopp && cd gopp-out && go run -race .
-```
-
-Same goes for `go vet`, delve, pprof — point them at `gopp-out`.
+Editor support: `editors/vscode` (highlighting + LSP client).
+Generated code is plain Go — `go run -race .`, vet, delve, and pprof
+all work on it.
 
 ## Docs
 
-- `SPEC.md` — the language contract: every rule the checker enforces,
-  written down.
-- `ROADMAP.md` — skeleton coverage and what's deliberately deferred.
-- `examples/` — runnable programs for each feature, with expected output
-  in the header comments.
+- `SPEC.md` — the language, written down (semantics, rules, limits)
+- `ROADMAP.md` — skeleton coverage and what's deliberately declined
+- `examples/` — every feature, runnable
+- `tests/ui/` — the diagnostics, as a test suite
 
-## Tests
+## Status
 
-```
-go test ./...
-```
-
-`tests/ui/*.gopp` holds diagnostics tests (`//~ ERROR msg` annotations,
-checked both directions), plus a fuzz test (the compiler must diagnose,
-never panic) and an end-to-end test that compiles and runs the examples.
+Actively built. Core type system complete (generics, behaviors,
+operators, comptime); concurrency via actors landed; stdlib and
+self-hosting growing. Main is protected: CI (gofmt, vet, tests, build)
+gates every push.
