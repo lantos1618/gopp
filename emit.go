@@ -27,6 +27,8 @@ type emitter struct {
 	needGopp    bool            // emitted a gopp.* reference: add the prelude import
 	usedImports map[string]bool // package qualifiers referenced: add imports
 	testMode    bool            // gopp test: user main() is renamed aside
+	actorFields map[string]bool   // behavior body: field name -> a.name
+	actorParams map[string]string // behavior body: param name -> msg field
 }
 
 func emit(f *File, c *checker) string {
@@ -45,6 +47,8 @@ func emitMode(f *File, c *checker, testMode bool) string {
 			e.emitBehavior(dd)
 		case *ImplDecl:
 			e.emitImpl(dd)
+		case *ActorDecl:
+			e.emitActor(dd)
 		case *FuncDecl:
 			if !dd.Native { // native funcs come from the package's .go file
 				e.emitFunc(dd)
@@ -120,6 +124,8 @@ func (e *emitter) typeGo(t Type) string {
 			parts[i] = e.typeGo(a)
 		}
 		return name + "[" + strings.Join(parts, ", ") + "]"
+	case *tActor:
+		return "*" + tt.decl.Name
 	case *tStruct:
 		name := tt.decl.Name
 		if q := e.c.declPkg[tt.decl]; q != "" { // imported struct (§3)
@@ -170,6 +176,9 @@ func (e *emitter) typeExprGo(te TypeExpr) string {
 		if dot := strings.IndexByte(t.Name, '.'); dot > 0 { // pkg.Type (§3)
 			e.useImport(t.Name[:dot])
 		}
+		if e.c.actors[t.Name] != nil {
+			return "*" + t.Name
+		}
 		return t.Name
 	case *IndexType:
 		parts := make([]string, len(t.Args))
@@ -187,6 +196,59 @@ func (e *emitter) typeExprGo(te TypeExpr) string {
 		return "*" + e.typeExprGo(t.X)
 	}
 	return "any"
+}
+
+// ---------- actors (Pony-style) ----------
+
+// emitActor lowers an actor to: a state struct with a mailbox, a message
+// enum synthesized from the behaviors, and a __run loop that executes
+// behaviors SEQUENTIALLY. Spawning (the `go` statement) only ever
+// happens here — users never write it.
+func (e *emitter) emitActor(d *ActorDecl) {
+	msgName := d.Name + "_msg"
+	e.s("type %s struct {\n", d.Name)
+	for _, f := range d.Fields {
+		e.s("%s %s\n", f.Name, e.typeExprGo(f.Type))
+	}
+	e.s("__mb chan %s\n", msgName)
+	e.s("}\n\n")
+	msg := &EnumDecl{Name: msgName}
+	for _, m := range d.Methods {
+		v := Variant{Name: m.Name, Line: m.Line}
+		for _, p := range m.Params {
+			v.Fields = append(v.Fields, Field{Name: p.Name, Type: p.Type, Line: p.Line})
+		}
+		msg.Variants = append(msg.Variants, v)
+	}
+	e.emitEnum(msg)
+	e.s("func (a *%s) __run() {\n", d.Name)
+	e.s("for m := range a.__mb {\n")
+	for i, m := range d.Methods {
+		kw := "if"
+		if i > 0 {
+			kw = " else if"
+		}
+		e.s("%s m.Gopp_Tag == %s {\n", kw, e.tagConst(msg, &msg.Variants[i]))
+		e.actorFields = map[string]bool{}
+		for _, f := range d.Fields {
+			e.actorFields[f.Name] = true
+		}
+		e.actorParams = map[string]string{}
+		for k, p := range m.Params {
+			e.actorParams[p.Name] = "m." + e.fieldGo(&msg.Variants[i], p, k)
+		}
+		e.emitStmts(m.Body.List)
+		e.actorFields = nil
+		e.actorParams = nil
+		e.s("}")
+	}
+	e.s("\n}\n}\n\n")
+}
+
+// actorSpawn renders the construction IIFE: build state + mailbox,
+// spawn the loop, hand back the reference.
+func (e *emitter) actorSpawn(inner string, name string) string {
+	return "func() *" + name + " { c := " + inner + "; go c.__run(); return c }()"
 }
 
 // ---------- structs ----------
@@ -484,6 +546,9 @@ func (e *emitter) emitStmt(s Stmt) {
 		} else if _, isMap := st.Type.(*MapType); isMap {
 			// go++ maps are instantiated on declaration — no nil maps
 			e.s("var %s %s = make(%s)\n", st.Name, ty, ty)
+		} else if id, isActor := st.Type.(*IdentType); isActor && e.c.actors[id.Name] != nil {
+			// zero actor: state + mailbox, loop spawned (Pony actors)
+			e.s("var %s *%s = %s\n", st.Name, id.Name, e.actorSpawn("&"+id.Name+"{__mb: make(chan "+id.Name+"_msg, 32)}", id.Name))
 		} else {
 			e.s("var %s %s\n", st.Name, ty)
 		}
@@ -646,6 +711,14 @@ func (e *emitter) expr(x Expr) string {
 			e.needGopp = true
 			return "gopp." + strings.ToUpper(ex.Name[:1]) + ex.Name[1:]
 		}
+		if e.actorParams != nil {
+			if tgt, ok := e.actorParams[ex.Name]; ok {
+				return tgt
+			}
+		}
+		if e.actorFields != nil && e.actorFields[ex.Name] {
+			return "a." + ex.Name
+		}
 		return ex.Name
 	case *BinaryExpr:
 		// §14: an operator impl desugars to the method call
@@ -734,6 +807,18 @@ func (e *emitter) expr(x Expr) string {
 	case *MatchExpr:
 		return e.capture(func() { e.emitMatch(ex, true) })
 	case *StructLitExpr:
+		if at, ok := e.c.types[ex].(*tActor); ok {
+			parts := make([]string, 0, len(ex.Fields)+1)
+			for _, fv := range ex.Fields {
+				if fv.Name != "" {
+					parts = append(parts, fv.Name+": "+e.expr(fv.Value))
+				} else {
+					parts = append(parts, e.expr(fv.Value))
+				}
+			}
+			parts = append(parts, "__mb: make(chan "+at.decl.Name+"_msg, 32)")
+			return e.actorSpawn("&"+at.decl.Name+"{"+strings.Join(parts, ", ")+"}", at.decl.Name)
+		}
 		parts := make([]string, len(ex.Fields))
 		for i, fv := range ex.Fields {
 			if fv.Name != "" {
@@ -864,6 +949,11 @@ func (e *emitter) call(ex *CallExpr) string {
 	argStr := strings.Join(args, ", ")
 	switch fun := ex.Fun.(type) {
 	case *SelectorExpr:
+		if sel, ok := e.c.actorCalls[ex]; ok {
+			// an async behavior call is a mailbox send (Pony actors)
+			at := e.c.types[fun.X].(*tActor)
+			return e.expr(fun.X) + ".__mb <- " + at.decl.Name + "_msg_" + sel + "(" + argStr + ")"
+		}
 		if ct, ok := e.c.resolved[fun]; ok {
 			// qualified constructor call: foo.Failed("x") -> foo.Status_Failed("x")
 			return e.ctorRef(ct, e.typeArgsGo(e.c.inferred[fun])) + "(" + argStr + ")"

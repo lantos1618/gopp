@@ -180,6 +180,8 @@ func (p *parser) tryDecl() (d Decl) {
 		return p.parseStructDecl()
 	case "behavior":
 		return p.parseBehaviorDecl()
+	case "actor":
+		return p.parseActorDecl()
 	case "impl":
 		return p.parseImplDecl()
 	case "comptime":
@@ -210,7 +212,7 @@ func (p *parser) synchronizeDecl() {
 	for p.cur().kind != kEOF {
 		if p.pos > start && depth == 0 {
 			switch p.cur().text {
-			case "func", "fn", "enum", "type", "import", "comptime", "behavior", "impl":
+			case "func", "fn", "enum", "type", "import", "comptime", "behavior", "impl", "actor":
 				return
 			}
 		}
@@ -285,6 +287,50 @@ func (p *parser) parseFuncDecl() Decl {
 	}
 	body := p.parseBlock()
 	return &FuncDecl{Name: name, TypeParams: typeParams, Bounds: bounds, Params: params, Results: results, Body: body, Line: tk.line, Col: tk.col}
+}
+
+// parseActorDecl parses `actor Name { fields; be Method(args) { } }`.
+func (p *parser) parseActorDecl() Decl {
+	tk := p.next() // actor
+	d := &ActorDecl{Name: p.expectIdent(), Line: tk.line, Col: tk.col}
+	p.expect("{")
+	for {
+		p.skipNL()
+		if p.cur().text == "}" {
+			p.next()
+			return d
+		}
+		if p.cur().text == "be" {
+			mk := p.next()
+			fn := &FuncDecl{Name: p.expectIdent(), Line: mk.line, Col: mk.col}
+			p.expect("(")
+			fn.Params = p.parseFieldList(")")
+			if p.cur().text == "(" {
+				p.next()
+				fn.Results = p.parseFieldList(")")
+			} else if p.cur().text != "{" && p.cur().kind != kNewline {
+				fn.Results = []Field{{Type: p.parseType(), Line: p.cur().line}}
+			}
+			p.skipNL()
+			fn.Body = p.parseBlock()
+			d.Methods = append(d.Methods, fn)
+			continue
+		}
+		// a field: names + type (same shape as struct fields)
+		fline := p.cur().line
+		names := []string{p.expectIdent()}
+		for p.cur().text == "," {
+			p.next()
+			names = append(names, p.expectIdent())
+		}
+		ty := p.parseType()
+		for _, n := range names {
+			d.Fields = append(d.Fields, Field{Name: n, Type: ty, Line: fline})
+		}
+		if p.cur().text == ";" {
+			p.next()
+		}
+	}
 }
 
 // parseBehaviorDecl parses `behavior Name { Method(self) Result ... }`.

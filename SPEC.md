@@ -444,6 +444,24 @@ drop order) do not apply and are deliberately deleted from the roadmap.
   document symbols, import-aware analysis (on-disk deps wired into
   buffer checking). Gaps: dirty-buffer deps, cross-file hover.
 
+## Actors (Pony-style concurrency)
+
+- `actor Counter { count int; be Add(n int) { ... } }` — an actor owns
+  its state; fields are PRIVATE (access from outside is an error).
+- Behaviors are async: calling `c.Add(5)` sends a message and returns
+  immediately (no value — assigning it is an error). Behaviors have no
+  results; use a reply channel to ask.
+- Execution is sequential per actor: messages dispatch one at a time
+  through a mailbox (a generated enum + loop). The `go` statement only
+  ever exists in generated code — users never write it.
+- Sendability (Pony's rule, checked at the declaration): behavior
+  params must be basic types, strings, enums/structs of sendables,
+  sendable channels, or actor references. No pointers, maps, or slices
+  — nothing deep-mutable crosses actors. Reference capabilities
+  (iso/val/trn) are the deliberate v2 deepening.
+- v1 limits: no behavior-to-behavior calls, mailbox cap is fixed (32),
+  reply via channels only.
+
 ## gopp test
 
 - `*_test.gopp` files are skipped by normal builds and compiled only

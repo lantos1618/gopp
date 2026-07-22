@@ -60,6 +60,17 @@ type BehaviorMethod struct {
 	Col     int
 }
 
+// ActorDecl is `actor Name { fields; be Method(args) { } }` — Pony-style
+// concurrency: private state, async behaviors, sequential execution per
+// actor, message sendability enforced at sema.
+type ActorDecl struct {
+	Name    string
+	Fields  []Field
+	Methods []*FuncDecl
+	Line    int
+	Col     int
+}
+
 // ImplDecl is `impl Behavior for Type { Method(self) ... { body } }`.
 // Coherence: one impl per (behavior, type); one method name per type.
 type ImplDecl struct {
@@ -98,6 +109,7 @@ func (*EnumDecl) declNode()     {}
 func (*StructDecl) declNode()   {}
 func (*BehaviorDecl) declNode() {}
 func (*ImplDecl) declNode()     {}
+func (*ActorDecl) declNode()    {}
 func (*ComptimeDecl) declNode() {}
 
 // ComptimeDecl is a top-level `comptime { ... }` block: metaprogramming

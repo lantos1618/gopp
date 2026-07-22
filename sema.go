@@ -49,6 +49,12 @@ type tStruct struct {
 	args []Type // §8: instantiation arguments for generic structs
 }
 
+// tActor is an actor type (Pony-style): nominal, reference-y (emitted as
+// a pointer to the state struct + mailbox).
+type tActor struct{ decl *ActorDecl }
+
+func (t *tActor) String() string { return t.decl.Name }
+
 func (t *tStruct) String() string {
 	if len(t.args) == 0 {
 		return t.decl.Name
@@ -309,12 +315,15 @@ type checker struct {
 	methods             map[string]map[string]*tFunc
 	preludeBehavior     map[string]bool // §14 operator traits (Add, Eq, ...)
 	usedPreludeBehavior map[string]bool // referenced by an impl or bound: emit the interface
+	actors              map[string]*ActorDecl
+	actorMethods        map[string]map[string]*tFunc // actor -> behavior -> sig
 	// outputs for the emitter (side tables, §1)
 	types       map[Expr]Type
 	resolved    map[Expr]*ctorTarget // idents/call-funs that are variant references
 	inferred    map[Expr][]Type      // ctor exprs whose type args were inferred (§8-lite)
 	constVals   map[Expr]constVal    // comptime exprs -> compile-time values (§10)
 	operatorOps map[Expr]string      // overloaded operator exprs -> impl method name (§14)
+	actorCalls  map[Expr]string      // async behavior calls -> behavior name (Pony actors)
 	patVariant  map[Pattern]bool     // IdentPat that matches a unit variant (not a binding)
 	cycleDone   map[*StructDecl]bool // structs already reported on an infinite-size cycle
 	preludeVars map[Expr]bool        // idents bound in the prelude (ms, second, minute)
@@ -410,6 +419,7 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 		inferred:            map[Expr][]Type{},
 		constVals:           map[Expr]constVal{},
 		operatorOps:         map[Expr]string{},
+		actorCalls:          map[Expr]string{},
 		patVariant:          map[Pattern]bool{},
 		preludeVars:         map[Expr]bool{},
 		imports:             map[string]*checker{},
@@ -420,6 +430,8 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 		behaviorSigs:        map[string]map[string]*tFunc{},
 		impls:               map[string]map[string]*ImplDecl{},
 		methods:             map[string]map[string]*tFunc{},
+		actors:              map[string]*ActorDecl{},
+		actorMethods:        map[string]map[string]*tFunc{},
 		preludeBehavior:     map[string]bool{},
 		usedPreludeBehavior: map[string]bool{},
 	}
@@ -532,6 +544,8 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			})
 		}
 	}
+	// §PONY: actors — after types, before signatures
+	c.registerActors(f)
 	// §8: behaviors and impls — after types, before signatures (bounds
 	// on function type params reference behaviors)
 	c.registerBehaviors(f)
@@ -692,6 +706,32 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 			c.curBounds = nil
 		}
 	}
+	// pass 2d: actor behavior bodies — fields in scope as mutable state,
+	// sequential execution guaranteed by emission
+	for _, d := range f.Decls {
+		a, ok := d.(*ActorDecl)
+		if !ok {
+			continue
+		}
+		for _, m := range a.Methods {
+			ft := c.actorMethods[a.Name][m.Name]
+			if ft == nil {
+				continue
+			}
+			c.curResults = nil
+			c.curFuncLine = m.Line
+			c.cur = &scope{parent: c.globals, vars: map[string]Type{}}
+			for _, fld := range a.Fields {
+				c.cur.vars[fld.Name] = c.resolveType(fld.Type)
+			}
+			for i, p := range m.Params {
+				if i < len(ft.params) && p.Name != "" {
+					c.cur.vars[p.Name] = ft.params[i]
+				}
+			}
+			c.checkStmts(m.Body.List)
+		}
+	}
 	// pass 3 (§9): flow checks over the typed bodies
 	c.checkFlow(f)
 	return c, c.diag
@@ -722,6 +762,80 @@ func structOf(ty Type) *tStruct {
 		}
 	}
 	return nil
+}
+
+// isSendable reports whether a value of this type may cross actors
+// (Pony's rule, simplified): basic types, strings, enums/structs of
+// sendables, sendable channels, and actor references themselves. No
+// pointers, no maps, no slices — nothing deep-mutable crosses.
+func (c *checker) isSendable(ty Type) bool {
+	switch t := ty.(type) {
+	case tBasic:
+		return true
+	case *tEnum:
+		for _, a := range t.args {
+			if !c.isSendable(a) {
+				return false
+			}
+		}
+		if c.prelude[t.decl] {
+			return true
+		}
+		for _, v := range t.decl.Variants {
+			for _, fld := range v.Fields {
+				if !c.isSendable(c.resolveTypeIn(fld.Type, t.decl)) {
+					return false
+				}
+			}
+		}
+		return true
+	case *tStruct:
+		for i := range t.decl.Fields {
+			if !c.isSendable(c.structFieldType(t, &t.decl.Fields[i])) {
+				return false
+			}
+		}
+		return true
+	case *tChan:
+		return c.isSendable(t.elem)
+	case *tActor:
+		return true // an actor reference is a capability, not shared state
+	}
+	return false
+}
+
+// containsTry reports whether x contains a TryExpr (which reports its
+// own misuse errors — suppress follow-on noise around it).
+func containsTry(x Expr) bool {
+	found := false
+	var walk func(e Expr)
+	walk = func(e Expr) {
+		switch ex := e.(type) {
+		case *TryExpr:
+			found = true
+		case *CallExpr:
+			walk(ex.Fun)
+			for _, a := range ex.Args {
+				walk(a)
+			}
+		case *BinaryExpr:
+			walk(ex.X)
+			walk(ex.Y)
+		case *UnaryExpr:
+			walk(ex.X)
+		case *SelectorExpr:
+			walk(ex.X)
+		case *IndexExpr:
+			walk(ex.X)
+			for _, i := range ex.Index {
+				walk(i)
+			}
+		case *SliceExpr:
+			walk(ex.X)
+		}
+	}
+	walk(x)
+	return found
 }
 
 // methodOf finds a method on ty (§8): impls for concrete local types,
@@ -896,6 +1010,63 @@ func (c *checker) registerPreludeBehaviors() {
 		}
 		c.curTypeParams = nil
 		c.behaviorSigs[b.Name] = sigs
+	}
+}
+
+// registerActors collects actor declarations: names, fields, behavior
+// signatures (Pony-style: behaviors are async — no results).
+func (c *checker) registerActors(f *File) {
+	for _, d := range f.Decls {
+		a, ok := d.(*ActorDecl)
+		if !ok {
+			continue
+		}
+		if _, dup := c.actors[a.Name]; dup {
+			c.diag.errorf(a.Line, "duplicate type %s", a.Name)
+			continue
+		}
+		if _, dup := c.enums[a.Name]; dup {
+			c.diag.errorf(a.Line, "duplicate type %s", a.Name)
+			continue
+		}
+		if _, dup := c.structs[a.Name]; dup {
+			c.diag.errorf(a.Line, "duplicate type %s", a.Name)
+			continue
+		}
+		c.actors[a.Name] = a
+		for _, fld := range a.Fields {
+			c.resolveType(fld.Type)
+		}
+		sigs := map[string]*tFunc{}
+		for _, m := range a.Methods {
+			if len(m.Results) > 0 {
+				c.diag.errorf(m.Line, "behaviors are async: %s must not return values", m.Name)
+				continue
+			}
+			if _, dup := sigs[m.Name]; dup {
+				c.diag.errorf(m.Line, "duplicate behavior %s in actor %s", m.Name, a.Name)
+				continue
+			}
+			ft := &tFunc{}
+			for _, p := range m.Params {
+				pt := c.resolveType(p.Type)
+				// Pony's rule, checked at the boundary: nothing
+				// deep-mutable may cross actors
+				if !c.isSendable(pt) {
+					c.diag.errorf(m.Line, "%s is not sendable between actors (no pointers, maps, or slices)", pt)
+				}
+				if p.Name != "" {
+					for _, fld := range a.Fields {
+						if fld.Name == p.Name {
+							c.diag.errorf(m.Line, "parameter %s shadows an actor field", p.Name)
+						}
+					}
+				}
+				ft.params = append(ft.params, pt)
+			}
+			sigs[m.Name] = ft
+		}
+		c.actorMethods[a.Name] = sigs
 	}
 }
 
@@ -1217,6 +1388,9 @@ func (c *checker) resolveTypeIn(te TypeExpr, inEnum *EnumDecl) Type {
 			}
 			return &tStruct{decl: s}
 		}
+		if a, ok := c.actors[t.Name]; ok {
+			return &tActor{decl: a}
+		}
 		c.diag.errorfAt(t.Line, t.Col, "undefined type %s", t.Name)
 		return terr
 	case *IndexType:
@@ -1459,6 +1633,14 @@ func (c *checker) checkStmt(s Stmt) {
 				rt := defaultType(c.checkExpr(st.Rhs[i]))
 				if mx, ok := st.Rhs[i].(*MatchExpr); ok && sameType(rt, tvoid) {
 					c.diag.errorfAt(mx.Line, mx.Col, "match in value context must produce a value in every arm")
+					continue
+				}
+				if _, isVoid := rt.(tVoid); isVoid && !containsTry(st.Rhs[i]) {
+					// void call in value position (the try desugar reports
+					// its own errors on misuse — don't double up; poisoned
+					// types are not void and already spoke)
+					c.diag.errorfAt(lineOf(st.Rhs[i]), colOf(st.Rhs[i]), "no value to assign (the call returns nothing)")
+					continue
 				}
 				id, ok := st.Lhs[i].(*Ident)
 				if !ok {
@@ -2428,6 +2610,17 @@ func (c *checker) checkCall(ex *CallExpr, want Type) Type {
 				return tbool
 			}
 		}
+		if at, ok := xt.(*tActor); ok {
+			// an async behavior call: a message send, not a function call
+			sig := c.actorMethods[at.decl.Name][fun.Sel]
+			if sig == nil {
+				c.diag.errorfAt(ex.Line, ex.Col, "actor %s has no behavior %s", at, fun.Sel)
+				return terr
+			}
+			c.checkCallArgs(ex, sig.params)
+			c.actorCalls[ex] = fun.Sel
+			return tvoid
+		}
 		if m := c.methodOf(xt, fun.Sel); m != nil { // §8 behavior impls
 			c.checkCallArgs(ex, m.params)
 			if len(m.results) > 0 {
@@ -2762,6 +2955,9 @@ func (c *checker) checkStructLit(ex *StructLitExpr) Type {
 	rt := c.resolveType(ex.Type)
 	st, ok := rt.(*tStruct)
 	if !ok {
+		if at, isActor := rt.(*tActor); isActor {
+			return c.checkActorLit(ex, at)
+		}
 		if !isErr(rt) {
 			c.diag.errorfAt(ex.Line, ex.Col, "composite literal of non-struct type %s", rt)
 		}
@@ -2808,6 +3004,46 @@ func (c *checker) checkStructLit(ex *StructLitExpr) Type {
 		c.diag.errorfAt(ex.Line, ex.Col, "too few values in %s literal: %d of %d fields", d.Name, positional, len(d.Fields))
 	}
 	return st
+}
+
+// checkActorLit checks an actor construction (Counter{...}): the same
+// rules as a struct literal, but the result spawns an actor.
+func (c *checker) checkActorLit(ex *StructLitExpr, at *tActor) Type {
+	d := at.decl
+	seen := map[string]bool{}
+	positional := 0
+	for _, fv := range ex.Fields {
+		if fv.Name == "" {
+			if positional >= len(d.Fields) {
+				c.diag.errorfAt(fv.Line, fv.Col, "too many values in %s literal (%d fields)", d.Name, len(d.Fields))
+				c.checkExpr(fv.Value)
+				continue
+			}
+			c.checkAgainst(fv.Value, c.resolveType(d.Fields[positional].Type))
+			positional++
+			continue
+		}
+		var f *Field
+		for i := range d.Fields {
+			if d.Fields[i].Name == fv.Name {
+				f = &d.Fields[i]
+			}
+		}
+		if f == nil {
+			c.diag.errorfAt(fv.Line, fv.Col, "actor %s has no field %s", d.Name, fv.Name)
+			c.checkExpr(fv.Value)
+			continue
+		}
+		if seen[fv.Name] {
+			c.diag.errorfAt(fv.Line, fv.Col, "duplicate field %s in literal", fv.Name)
+		}
+		seen[fv.Name] = true
+		c.checkAgainst(fv.Value, c.resolveType(f.Type))
+	}
+	if positional > 0 && positional != len(d.Fields) {
+		c.diag.errorfAt(ex.Line, ex.Col, "too few values in %s literal: %d of %d fields", d.Name, positional, len(d.Fields))
+	}
+	return at
 }
 
 // withTypeParams runs f with params as the in-scope rigid type
@@ -2870,6 +3106,14 @@ func (c *checker) checkSelector(ex *SelectorExpr) Type {
 		if ex.Sel == "IsOk" || ex.Sel == "IsErr" {
 			return &tFunc{results: []Type{tbool}}
 		}
+	}
+	if at, ok := xt.(*tActor); ok {
+		if c.actorMethods[at.decl.Name][ex.Sel] != nil {
+			c.diag.errorfAt(ex.Line, ex.Col, "behavior %s is async: call it as a statement", ex.Sel)
+			return terr
+		}
+		c.diag.errorfAt(ex.Line, ex.Col, "actor state is private: %s has no field %s (use behaviors)", at, ex.Sel)
+		return terr
 	}
 	if m := c.methodOf(xt, ex.Sel); m != nil { // §8 method value
 		return m

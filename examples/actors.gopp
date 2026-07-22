@@ -1,0 +1,31 @@
+package main
+
+// Pony-style actors: private state, async behaviors, sequential
+// execution per actor. Users never write `go` — the compiler spawns.
+
+actor Counter {
+    count int
+
+    be Add(n int) {
+        count = count + n
+    }
+
+    be Get(reply chan<int>) {
+        reply.send(count)
+    }
+}
+
+func main() {
+    c := Counter{}
+    c.Add(5)
+    c.Add(37)
+    r := chan<int>(1)
+    c.Get(r)
+    println(r.recv())
+
+    var z Counter
+    z.Add(10)
+    r2 := chan<int>(1)
+    z.Get(r2)
+    println(r2.recv())
+}

@@ -1,0 +1,38 @@
+package main
+
+// actors: error paths.
+
+actor Counter {
+    count int
+
+    be Add(n int) {
+        count = count + n
+    }
+}
+
+actor Bad {
+    t map<string, int>
+
+    be Store(m map<string, int>) { //~ ERROR map<string, int> is not sendable between actors (no pointers, maps, or slices)
+        t = m
+    }
+}
+
+actor WithResult {
+    be Nope() int { //~ ERROR behaviors are async: Nope must not return values
+    }
+}
+
+actor Shadow {
+    count int
+
+    be Set(count int) { //~ ERROR parameter count shadows an actor field
+    }
+}
+
+func main() {
+    c := Counter{}
+    c.Add(1)
+    println(c.count) //~ ERROR actor state is private: Counter has no field count (use behaviors)
+    x := c.Add(1) //~ ERROR no value to assign (the call returns nothing)
+}

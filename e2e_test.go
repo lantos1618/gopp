@@ -406,3 +406,11 @@ func TestEndToEndSlicing(t *testing.T) {
 		t.Fatalf("slicing.gopp output:\n got %q\nwant %q", got, want)
 	}
 }
+
+func TestEndToEndActors(t *testing.T) {
+	got := compileAndRun(t, "examples/actors.gopp")
+	want := "42\n10\n"
+	if got != want {
+		t.Fatalf("actors.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
