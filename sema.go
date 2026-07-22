@@ -579,6 +579,38 @@ func checkImports(f *File, imports map[string]*checker, importPaths map[string]s
 		}
 		c.curTypeParams = nil
 	}
+	// pass 2c: behavior default method bodies — checked ONCE, rigidly:
+	// the receiver is the Self type parameter with the behavior as its
+	// bound, so a default may call sibling methods but nothing else
+	for _, d := range f.Decls {
+		b, ok := d.(*BehaviorDecl)
+		if !ok {
+			continue
+		}
+		for _, m := range b.Methods {
+			if m.Body == nil {
+				continue
+			}
+			ft := c.behaviorSigs[b.Name][m.Name]
+			if ft == nil {
+				continue
+			}
+			c.curResults = ft.results
+			c.curFuncLine = m.Line
+			c.curTypeParams = []string{"Self"}
+			c.curBounds = map[string]string{"Self": b.Name}
+			c.cur = &scope{parent: c.globals, vars: map[string]Type{}}
+			c.cur.vars[recvNameFields(m.Params)] = tTypeParam{"Self"}
+			for i, p := range m.Params[1:] {
+				if i < len(ft.params) {
+					c.cur.vars[p.Name] = ft.params[i]
+				}
+			}
+			c.checkStmts(m.Body.List)
+			c.curTypeParams = nil
+			c.curBounds = nil
+		}
+	}
 	// pass 3 (§9): flow checks over the typed bodies
 	c.checkFlow(f)
 	return c, c.diag
@@ -936,9 +968,14 @@ func (c *checker) registerImpls(f *File) {
 			c.methods[tn][m.Name] = ft
 		}
 		for _, bm := range b.Methods {
-			if !seen[bm.Name] && len(bm.Params) > 0 {
-				c.diag.errorf(imp.Line, "missing method %s (behavior %s for %s)", bm.Name, imp.Behavior, tn)
+			if seen[bm.Name] || len(bm.Params) == 0 {
+				continue
 			}
+			if bm.Body != nil { // default body fills the method (§23-lite)
+				c.methods[tn][bm.Name] = sigs[bm.Name]
+				continue
+			}
+			c.diag.errorf(imp.Line, "missing method %s (behavior %s for %s)", bm.Name, imp.Behavior, tn)
 		}
 		c.curTypeParams = nil // generic impl scope ends
 	}
@@ -961,11 +998,15 @@ func implTypeName(te TypeExpr) string {
 // recvName extracts the receiver's binding name from a method's first
 // parameter (`String(self)` — self is syntactically an unnamed param).
 func recvName(m *FuncDecl) string {
-	if len(m.Params) == 0 {
+	return recvNameFields(m.Params)
+}
+
+func recvNameFields(params []Field) string {
+	if len(params) == 0 {
 		return ""
 	}
-	if m.Params[0].Name != "" {
-		return m.Params[0].Name
+	if params[0].Name != "" {
+		return params[0].Name
 	}
 	return "self"
 }

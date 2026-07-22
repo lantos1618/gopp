@@ -1,0 +1,48 @@
+package main
+
+// §23-lite: default method bodies. A behavior method with a body is a
+// fallback — impls that don't provide it get it for free; impls that do
+// override it. Defaults are checked once, rigidly (receiver is Self),
+// and may call sibling methods of the behavior.
+
+enum Status {
+    Active
+    Inactive
+}
+
+behavior Described {
+    Code(self) int
+    Label(self) string {
+        if self.Code() > 0 { return "positive" }
+        return "zero"
+    }
+}
+
+impl Described for Status {
+    Code(self) int {
+        return match self {
+            Active -> 1
+            Inactive -> 0
+        }
+    }
+}
+
+type Special struct {
+    N int
+}
+
+impl Described for Special {
+    Code(self) int {
+        return 99
+    }
+    Label(self) string { // overrides the default
+        return "special"
+    }
+}
+
+func main() {
+    println(Active.Label())        // default: "positive"
+    println(Inactive.Label())      // default: "zero"
+    println(Special{N: 1}.Label()) // override: "special"
+}
+

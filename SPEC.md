@@ -127,8 +127,13 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
 - Generic impls: `impl Shower for Box[T]` — the enum's own parameters,
   in order; methods use `T` rigidly, signatures instantiate per call
   site. Emission is a Go receiver method on `Box[T]`.
-- Deferred: imported behaviors/types in impls, default method bodies,
-  multiple bounds per parameter.
+- Default method bodies (§23-lite): a behavior method with a body is a
+  fallback — impls that omit it get it, impls that provide it override
+  it. Defaults are checked once, rigidly: the receiver is Self with the
+  behavior as its bound, so a default may call sibling methods but has
+  no fields. Emission writes the default as the receiver method.
+- Deferred: imported behaviors/types in impls, multiple bounds per
+  parameter.
 
 ## Generic constructor inference (§8-lite)
 

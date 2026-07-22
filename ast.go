@@ -55,6 +55,7 @@ type BehaviorMethod struct {
 	Name    string
 	Params  []Field // Params[0] is the receiver
 	Results []Field
+	Body    *Block // non-nil = default implementation (§23-lite)
 	Line    int
 	Col     int
 }

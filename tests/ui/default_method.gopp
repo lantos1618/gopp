@@ -1,0 +1,35 @@
+package main
+
+// default method bodies: error paths.
+
+enum Status {
+    Active
+}
+
+behavior Req {
+    Code(self) int
+}
+
+impl Req for Status { //~ ERROR missing method Code (behavior Req for Status)
+}
+
+behavior Mixed {
+    Code(self) int
+    Label(self) string {
+        return "x"
+    }
+}
+
+impl Mixed for Status { //~ ERROR missing method Code (behavior Mixed for Status)
+}
+
+behavior BadDefault {
+    Nope(self) int {
+        return self.field //~ ERROR Self has no field or method field
+    }
+}
+
+func main() {
+    println("ok")
+}
+

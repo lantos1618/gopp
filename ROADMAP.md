@@ -75,8 +75,9 @@ recover · ✅ conflicts poison inference (one mistake, one diagnostic).
    ~~comptime match + string builtins~~ ✅
 2. ~~stdlib v1 (str, conv + native FFI)~~ ✅ · ~~generic impls~~ ✅ ·
    ~~compound assign (+ sema leak fix)~~ ✅
-3. **§8/§14 leftovers** — cross-package impls, default method bodies,
-   indexing overloads; **LSP v2**; **§17 interning**.
+3. ~~default method bodies (§23-lite)~~ ✅
+4. **Leftovers** — cross-package impls, indexing overloads; **LSP v2**;
+   **§17 interning**.
 3. **§17 interning + §1 integer IDs** — when compile times or LSP make
    them pay; both are wrappers, not rewrites, by design.
 4. **LSP v2** — import-aware analysis, local-var definitions, column

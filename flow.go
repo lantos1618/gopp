@@ -39,6 +39,18 @@ func (c *checker) checkFlow(f *File) {
 					}
 				}
 			}
+		case *BehaviorDecl:
+			for _, m := range fn.Methods {
+				if m.Body == nil {
+					continue
+				}
+				c.scanUnreachable(m.Body.List)
+				if ft := c.behaviorSigs[fn.Name][m.Name]; ft != nil && len(ft.results) > 0 {
+					if !c.listDiverges(m.Body.List) {
+						c.diag.errorf(m.Line, "default method %s: missing return (some path falls through without returning)", m.Name)
+					}
+				}
+			}
 		}
 	}
 }

@@ -170,6 +170,14 @@ func TestEndToEndGenericImpl(t *testing.T) {
 	}
 }
 
+func TestEndToEndDefaultMethod(t *testing.T) {
+	got := compileAndRun(t, "examples/default_method.gopp")
+	want := "positive\nzero\nspecial\n"
+	if got != want {
+		t.Fatalf("default_method.gopp output:\n got %q\nwant %q", got, want)
+	}
+}
+
 // writePkg makes a one-file package in dir/name for loader unit tests.
 func writePkg(t *testing.T, dir, name, src string) {
 	t.Helper()

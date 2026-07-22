@@ -330,7 +330,9 @@ func (e *emitter) emitOperatorInterface(name string) {
 func (e *emitter) emitImpl(d *ImplDecl) {
 	tn := implTypeName(d.Type) // registerImpls guaranteed this
 	rt := e.typeExprGo(d.Type)
+	implHas := map[string]bool{}
 	for _, m := range d.Methods {
+		implHas[m.Name] = true
 		ft := e.c.methods[tn][m.Name]
 		if ft == nil {
 			continue
@@ -339,6 +341,25 @@ func (e *emitter) emitImpl(d *ImplDecl) {
 		recv := recvName(m)
 		e.s("func (%s %s) %s%s {\n", recv, rt, m.Name, e.sigGo(m.Params[1:], m.Results))
 		e.emitStmts(m.Body.List)
+		e.s("}\n\n")
+	}
+	// default bodies fill the methods the impl didn't provide (§23-lite)
+	b := e.c.behaviors[d.Behavior]
+	if b == nil {
+		return
+	}
+	for _, bm := range b.Methods {
+		if bm.Body == nil || implHas[bm.Name] {
+			continue
+		}
+		ft := e.c.methods[tn][bm.Name]
+		if ft == nil {
+			continue
+		}
+		e.curResults = ft.results
+		recv := recvNameFields(bm.Params)
+		e.s("func (%s %s) %s%s {\n", recv, rt, bm.Name, e.sigGo(bm.Params[1:], bm.Results))
+		e.emitStmts(bm.Body.List)
 		e.s("}\n\n")
 	}
 }

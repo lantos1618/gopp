@@ -297,6 +297,13 @@ func (p *parser) parseBehaviorDecl() Decl {
 			p.cur().text == "map" || p.cur().text == "chan" {
 			m.Results = []Field{{Type: p.parseType(), Line: p.cur().line}}
 		}
+		save := p.pos
+		p.skipNL()
+		if p.cur().text == "{" { // default implementation (§23-lite)
+			m.Body = p.parseBlock()
+		} else {
+			p.pos = save
+		}
 		d.Methods = append(d.Methods, m)
 	}
 }
