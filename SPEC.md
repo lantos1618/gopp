@@ -196,6 +196,10 @@ Section numbers refer to the ZEN SEMA SKELETON this compiler follows.
   (numbers, strings, bools, durations); `{{` and `}}` are literal
   braces. Expressions may nest braces (`{Point{X: 1}.X}` works).
   Interpolating an enum/struct/other non-basic type is a sema error.
+- Expressions may contain string literals (`"{m["answer"]}"` works —
+  the lexer tracks interpolation nesting; a nested string may not
+  itself interpolate). A lone `{` opens interpolation — write `{{` for
+  a literal brace.
 - Emission is `gopp.Str(parts...)` — exact concatenation, no added
   spacing. Interpolation is not a constant expression at comptime.
 

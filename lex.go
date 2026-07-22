@@ -122,15 +122,73 @@ func lexAt(src string, base int) ([]token, error) {
 			emit(kFloat, src[i:j])
 			i = j
 		case c == '"':
+			// scan a string with interpolation: `{` enters expression
+			// mode where quotes start NESTED strings (so {m["k"]}
+			// works); the outer quote closes only in string-text mode
 			j := i + 1
-			for j < n && src[j] != '"' {
-				if src[j] == '\\' {
+			exprDepth := 0
+		scanString:
+			for j < n {
+				d := src[j]
+				if exprDepth == 0 {
+					switch {
+					case d == '\\':
+						j += 2
+					case d == '\n':
+						return nil, fmt.Errorf("line %d: newline in string literal", line)
+					case d == '{':
+						exprDepth++
+						j++
+					case d == '}': // literal (parser reports the mismatch)
+						j++
+					case d == '"':
+					default:
+						j++
+						continue
+					}
+					if d == '"' {
+						break // closing quote
+					}
+					continue
+				}
+				// expression mode (inside { ... })
+				switch {
+				case d == '\n':
+					return nil, fmt.Errorf("line %d: newline in string literal", line)
+				case d == '"': // nested string (no further interpolation inside)
+					q := j
+					j++
+					for j < n && src[j] != '"' && src[j] != '\n' {
+						if src[j] == '\\' {
+							j++
+						}
+						j++
+					}
+					if j >= n || src[j] == '\n' {
+						// no nested string after all: this quote was the
+						// outer closer; the parser reports the unbalanced {
+						j = q
+						break scanString
+					}
+					j++
+				case d == '\'':
+					j++
+					for j < n && src[j] != '\'' && src[j] != '\n' {
+						if src[j] == '\\' {
+							j++
+						}
+						j++
+					}
+					j++
+				case d == '{':
+					exprDepth++
+					j++
+				case d == '}':
+					exprDepth--
+					j++
+				default:
 					j++
 				}
-				if j < n && src[j] == '\n' {
-					return nil, fmt.Errorf("line %d: newline in string literal", line)
-				}
-				j++
 			}
 			if j >= n {
 				return nil, fmt.Errorf("line %d: unterminated string literal", line)

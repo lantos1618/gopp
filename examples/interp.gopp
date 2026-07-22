@@ -16,6 +16,8 @@ func main() {
     println("call: {double(21)}")
     d := 100 * ms
     println("duration: {d}")
+    m := map<string, int>{"answer": 42}
+    println("nested quotes: {m["answer"]}")
 }
 
 type Point struct {
