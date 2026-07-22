@@ -22,11 +22,11 @@ type emitter struct {
 	buf         strings.Builder
 	tmp         int
 	loops       []string
-	curResults  []Type          // enclosing function's results (for ? desugars)
-	needTime    bool            // emitted time.Duration somewhere: add the import
-	needGopp    bool            // emitted a gopp.* reference: add the prelude import
-	usedImports map[string]bool // package qualifiers referenced: add imports
-	testMode    bool            // gopp test: user main() is renamed aside
+	curResults  []Type            // enclosing function's results (for ? desugars)
+	needTime    bool              // emitted time.Duration somewhere: add the import
+	needGopp    bool              // emitted a gopp.* reference: add the prelude import
+	usedImports map[string]bool   // package qualifiers referenced: add imports
+	testMode    bool              // gopp test: user main() is renamed aside
 	actorFields map[string]bool   // behavior body: field name -> a.name
 	actorParams map[string]string // behavior body: param name -> msg field
 }
