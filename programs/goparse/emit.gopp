@@ -1,0 +1,648 @@
+package main
+
+// emit.gopp — Go code generation from goparse's AST, written in go++.
+// Self-hosting milestone 4 (the last mile): go++ source -> AST ->
+// checked -> Go source, which the Go toolchain builds. Mirrors the
+// layout of the compiler's emit.go so generated code looks familiar.
+
+// ---------- type rendering ----------
+
+func typeGo(t Type) string {
+    return match t {
+        TInt -> "int"
+        TFloat -> "float64"
+        TString -> "string"
+        TBool -> "bool"
+        TByte -> "byte"
+        TVoid -> ""
+        TErr -> "any"
+        TNever -> ""
+        TNamed(n) -> n
+        TSliceE(e) -> "[]" + typeGo(*e)
+        TMapE(k, v) -> "map[" + typeGo(*k) + "]" + typeGo(*v)
+        TChanE(e) -> "chan " + typeGo(*e)
+        TPtr(x) -> "*" + typeGo(*x)
+    }
+}
+
+// ---------- emitter ----------
+
+type Emitter struct {
+    buf        string
+    tmp        int
+    depth      int
+    enums      map<string, bool>
+    structFlds map<string, [Field]>
+    ctors      map<string, string>
+    variants   map<string, Variant>
+    fmtUsed    bool
+    curResults [Type]
+}
+
+func newEmitter(decls [Decl]) *Emitter {
+    e := &Emitter{
+        enums:      map<string, bool>{},
+        structFlds: map<string, [Field]>{},
+        ctors:      map<string, string>{},
+        variants:   map<string, Variant>{},
+    }
+    for d in decls {
+        match d {
+            DEnum(name, tp, variants) -> {
+                e.enums[name] = true
+                for v in variants {
+                    e.ctors[v.Name] = name
+                    e.variants[v.Name] = v
+                }
+            }
+            DStruct(name, tp, fields) -> {
+                e.structFlds[name] = fields
+            }
+            _ -> { continue }
+        }
+    }
+    return e
+}
+
+func es(e *Emitter, line string) {
+    for i := 0; i < e.depth; i++ {
+        e.buf = e.buf + "    "
+    }
+    e.buf = e.buf + line + "\n"
+}
+
+func eraw(e *Emitter, text string) {
+    e.buf = e.buf + text
+}
+
+func tmpName(e *Emitter, prefix string) string {
+    n := "__gopp_" + prefix + "{e.tmp}"
+    e.tmp++
+    return n
+}
+
+func tagConst(enum string, variant string) string {
+    return "Gopp_Tag_" + enum + "_" + variant
+}
+
+func fieldGo(variant string, name string, k int) string {
+    if name != "" {
+        return "Gopp_F_" + variant + "_" + name
+    }
+    return "Gopp_F_" + variant + "_v{k}"
+}
+
+// ---------- declarations ----------
+
+func emitDecls(e *Emitter, decls [Decl]) {
+    eraw(e, "package main\n\n")
+    for d in decls {
+        emitDecl(e, d)
+    }
+    if e.fmtUsed {
+        e.buf = "package main\n\nimport \"fmt\"\n" + e.buf[len("package main\n\n"):]
+    }
+}
+
+func emitDecl(e *Emitter, d Decl) {
+    match d {
+        DStruct(name, tp, fields) -> {
+            es(e, "type " + name + " struct {{")
+            e.depth++
+            for f in fields {
+                es(e, f.Name + " " + typeGo(parseTypeText(f.Type)))
+            }
+            e.depth--
+            es(e, "}}")
+            eraw(e, "\n")
+        }
+        DEnum(name, tp, variants) -> emitEnum(e, name, variants)
+        DFunc(name, tp, params, results, body) -> emitFunc(e, name, params, results, body)
+    }
+}
+
+func emitEnum(e *Emitter, name string, variants [Variant]) {
+    tagT := "gopp_tag_" + name
+    es(e, "type " + tagT + " int")
+    es(e, "const (")
+    e.depth++
+    for i, v in variants {
+        if i == 0 {
+            es(e, tagConst(name, v.Name) + " " + tagT + " = iota")
+        } else {
+            es(e, tagConst(name, v.Name))
+        }
+    }
+    e.depth--
+    es(e, ")")
+    es(e, "type " + name + " struct {{")
+    e.depth++
+    es(e, "Gopp_Tag " + tagT)
+    for v in variants {
+        for k, f in v.Fields {
+            es(e, fieldGo(v.Name, f.Name, k) + " " + typeGo(parseTypeText(f.Type)))
+        }
+    }
+    e.depth--
+    es(e, "}}")
+    for v in variants {
+        params := ""
+        args := ""
+        for k, f in v.Fields {
+            if k > 0 {
+                params = params + ", "
+                args = args + ", "
+            }
+            pname := f.Name
+            if pname == "" {
+                pname = "v{k}"
+            }
+            params = params + pname + " " + typeGo(parseTypeText(f.Type))
+            args = args + fieldGo(v.Name, f.Name, k) + ": " + pname
+        }
+        es(e, "func " + name + "_" + v.Name + "(" + params + ") " + name + " {{")
+        e.depth++
+        es(e, "return " + name + "{{Gopp_Tag: " + tagConst(name, v.Name) + ", " + args + "}}")
+        e.depth--
+        es(e, "}}")
+    }
+    eraw(e, "\n")
+}
+
+func emitFunc(e *Emitter, name string, params [Field], results [Field], body [Stmt]) {
+    ps := ""
+    for i, p in params {
+        if i > 0 {
+            ps = ps + ", "
+        }
+        ps = ps + p.Name + " " + typeGo(parseTypeText(p.Type))
+    }
+    res := ""
+    if len(results) == 1 {
+        res = " " + typeGo(parseTypeText(results[0].Type))
+    }
+    if len(results) > 1 {
+        res = " ("
+        for i, r in results {
+            if i > 0 {
+                res = res + ", "
+            }
+            res = res + typeGo(parseTypeText(r.Type))
+        }
+        res = res + ")"
+    }
+    e.curResults = [Type]{}
+    for r in results {
+        e.curResults = append(e.curResults, parseTypeText(r.Type))
+    }
+    es(e, "func " + name + "(" + ps + ")" + res + " {{")
+    e.depth++
+    emitStmts(e, body)
+    e.depth--
+    es(e, "}}")
+    eraw(e, "\n")
+}
+
+// ---------- statements ----------
+
+func emitStmts(e *Emitter, ss [Stmt]) {
+    for s in ss {
+        emitStmt(e, s)
+    }
+}
+
+func emitStmt(e *Emitter, s Stmt) {
+    match s {
+        SNil -> { return }
+        SVar(name, tname, init) -> {
+            ty := typeGo(parseTypeText(tname))
+            if isENil(init) {
+                es(e, "var " + name + " " + ty)
+            } else {
+                es(e, "var " + name + " " + ty + " = " + emitExpr(e, *init))
+            }
+        }
+        SAssign(lhs, op, rhs) -> {
+            es(e, exprsGo(e, lhs) + " " + op + " " + exprsGo(e, rhs))
+        }
+        SExprStmt(x) -> {
+            match *x {
+                EMatch(subj, arms) -> emitMatch(e, *x, false)
+                _ -> es(e, emitExpr(e, *x))
+            }
+        }
+        SIf(cond, then, els) -> {
+            es(e, "if " + emitExpr(e, *cond) + " {{")
+            e.depth++
+            emitStmts(e, then)
+            e.depth--
+            if len(els) > 0 {
+                es(e, "}} else {{")
+                e.depth++
+                emitStmts(e, els)
+                e.depth--
+            }
+            es(e, "}}")
+        }
+        SFor(init, cond, post, body) -> {
+            header := "for "
+            if !isSNil(*init) {
+                header = header + stmtInline(e, *init) + ";"
+            }
+            if !isENil(cond) {
+                header = header + " " + emitExpr(e, *cond)
+            }
+            if !isSNil(*post) {
+                header = header + "; " + stmtInline(e, *post)
+            }
+            es(e, header + " {{")
+            e.depth++
+            emitStmts(e, body)
+            e.depth--
+            es(e, "}}")
+        }
+        SLoop(body) -> {
+            es(e, "for {{")
+            e.depth++
+            emitStmts(e, body)
+            e.depth--
+            es(e, "}}")
+        }
+        SForIn(v1, v2, x, body) -> {
+            vars := v1
+            if v2 != "" {
+                vars = v1 + ", " + v2
+            } else {
+                vars = "_, " + v1
+            }
+            es(e, "for " + vars + " := range " + emitExpr(e, *x) + " {{")
+            e.depth++
+            emitStmts(e, body)
+            e.depth--
+            es(e, "}}")
+        }
+        SBreak(label) -> {
+            if label == "loop" {
+                es(e, "break")
+            } else {
+                es(e, "break")
+            }
+        }
+        SContinue -> {
+            es(e, "continue")
+        }
+        SReturn(vals) -> {
+            if len(vals) == 0 {
+                es(e, "return")
+            } else {
+                es(e, "return " + exprsGo(e, vals))
+            }
+        }
+        SIncDec(x, op) -> {
+            es(e, emitExpr(e, *x) + op)
+        }
+        SDefer(x) -> {
+            es(e, "defer " + emitExpr(e, *x))
+        }
+    }
+}
+
+func isSNil(s Stmt) bool {
+    return match s {
+        SNil -> true
+        _ -> false
+    }
+}
+
+func stmtInline(e *Emitter, s Stmt) string {
+    return match s {
+        SAssign(lhs, op, rhs) -> exprsGo(e, lhs) + " " + op + " " + exprsGo(e, rhs)
+        SIncDec(x, op) -> emitExpr(e, *x) + op
+        SExprStmt(x) -> emitExpr(e, *x)
+        _ -> ""
+    }
+}
+
+func exprsGo(e *Emitter, xs [Expr]) string {
+    out := ""
+    for i, x in xs {
+        if i > 0 {
+            out = out + ", "
+        }
+        out = out + emitExpr(e, x)
+    }
+    return out
+}
+
+// ---------- expressions ----------
+
+func emitExpr(e *Emitter, x Expr) string {
+    return match x {
+        ENil -> "nil"
+        ENum(s) -> s
+        EStr(s) -> interpGo(e, s)
+        ERune(s) -> s
+        EIdent(name) -> identGo(e, name)
+        EBinary(op, a, b) -> "(" + emitExpr(e, *a) + " " + op + " " + emitExpr(e, *b) + ")"
+        EUnary(op, a) -> op + emitExpr(e, *a)
+        ECall(f, args) -> callGo(e, *f, args)
+        ESelector(a, sel) -> emitExpr(e, *a) + "." + sel
+        EIndex(a, idx) -> emitExpr(e, *a) + "[" + exprsGo(e, idx) + "]"
+        ESlice(a, lo, hi) -> emitExpr(e, *a) + "[" + emitExpr(e, *lo) + ":" + emitExpr(e, *hi) + "]"
+        ESliceLit(elem, vals) -> "[]" + typeGo(parseTypeText(elem)) + "{{" + exprsGo(e, vals) + "}}"
+        EMapLit(k, v, keys, vals) -> "map[" + typeGo(parseTypeText(k)) + "]" + typeGo(parseTypeText(v)) + "{{" + pairsGo(e, keys, vals) + "}}"
+        EStructLit(tname, names, vals) -> structLitGo(e, tname, names, vals)
+        EMatch(subj, arms) -> matchValueGo(e, x)
+        ETry(a) -> tryGo(e, x)
+        EMakeChan(elem, capE) -> makeChanGo(e, elem, capE)
+    }
+}
+
+func identGo(e *Emitter, name string) string {
+    if name == "true" || name == "false" {
+        return name
+    }
+    if has(e.ctors[name]) {
+        // unit variant value
+        return e.ctors[name] + "_" + name + "()"
+    }
+    return name
+}
+
+func callGo(e *Emitter, f Expr, args [Expr]) string {
+    argStr := exprsGo(e, args)
+    match f {
+        EIdent(name) -> {
+            if name == "println" {
+                e.fmtUsed = true
+                return "fmt.Println(" + argStr + ")"
+            }
+            if name == "print" {
+                e.fmtUsed = true
+                return "fmt.Print(" + argStr + ")"
+            }
+            if name == "panic" {
+                return "panic(" + argStr + ")"
+            }
+            if has(e.ctors[name]) {
+                return e.ctors[name] + "_" + name + "(" + argStr + ")"
+            }
+            return name + "(" + argStr + ")"
+        }
+        ESelector(a, sel) -> {
+            at := emitExpr(e, *a)
+            if sel == "send" {
+                return at + " <- " + argStr
+            }
+            if sel == "recv" {
+                return "<-" + at
+            }
+            if sel == "close" {
+                return "close(" + at + ")"
+            }
+            return at + "." + sel + "(" + argStr + ")"
+        }
+        EIndex(b, idx) -> {
+            // generic ctor instantiation: Err[int, string](v) — Go drops args
+            name := match *b {
+                EIdent(n) -> n
+                _ -> "?"
+            }
+            if has(e.ctors[name]) {
+                return e.ctors[name] + "_" + name + "(" + argStr + ")"
+            }
+            return name + "(" + argStr + ")"
+        }
+        _ -> { return emitExpr(e, f) + "(" + argStr + ")" }
+    }
+}
+
+func pairsGo(e *Emitter, keys [Expr], vals [Expr]) string {
+    out := ""
+    for i, k in keys {
+        if i > 0 {
+            out = out + ", "
+        }
+        out = out + emitExpr(e, k) + ": " + emitExpr(e, vals[i])
+    }
+    return out
+}
+
+func structLitGo(e *Emitter, tname string, names [string], vals [Expr]) string {
+    out := tname + "{{"
+    for i, n in names {
+        if i > 0 {
+            out = out + ", "
+        }
+        if n != "" {
+            out = out + n + ": "
+        }
+        out = out + emitExpr(e, vals[i])
+    }
+    return out + "}}"
+}
+
+func makeChanGo(e *Emitter, elem string, capE *Expr) string {
+    et := typeGo(parseTypeText(elem))
+    if isENil(capE) {
+        return "make(chan " + et + ")"
+    }
+    return "make(chan " + et + ", " + emitExpr(e, *capE) + ")"
+}
+
+// ---------- match ----------
+
+// patName extracts the leading token of a pattern text ("Ok ( v )" -> "Ok").
+func patName(pat string) string {
+    for i := 0; i < len(pat); i++ {
+        if pat[i] == byte(' ') {
+            return pat[0:i]
+        }
+    }
+    return pat
+}
+
+// patBinds extracts binding names from "Ok ( v )" -> ["v"].
+func patBinds(pat string) [string] {
+    var out [string]
+    if !contains(pat, "(") {
+        return out
+    }
+    inner := pat[0 : len(pat)-1]
+    for i := 0; i < len(inner); i++ {
+        if inner[i] == byte('(') {
+            inner = inner[i+1:]
+            break
+        }
+    }
+    for p in split(inner, " ") {
+        if p != "" && p != "," {
+            out = append(out, p)
+        }
+    }
+    return out
+}
+
+func armCond(e *Emitter, mv string, subj Expr, pat string) (string, [string]) {
+    if pat == "_" {
+        return "true", [string]{}
+    }
+    name := patName(pat)
+    if has(e.ctors[name]) {
+        binds := patBinds(pat)
+        return mv + ".Gopp_Tag == " + tagConst(e.ctors[name], name), binds
+    }
+    if pat == "true" || pat == "false" {
+        return mv + " == " + pat, [string]{}
+    }
+    if len(pat) > 0 && (isDigit(pat[0]) || pat[0] == byte('"') || pat[0] == byte('\'')) {
+        return mv + " == (" + pat + ")", [string]{}
+    }
+    // bare binding matches everything
+    return "true", [string]{pat}
+}
+
+func emitMatch(e *Emitter, m Expr, valueCtx bool) {
+    var subj Expr
+    var arms [Arm]
+    match m {
+        EMatch(s, a) -> {
+            subj = *s
+            arms = a
+        }
+        _ -> { return }
+    }
+    mv := tmpName(e, "m")
+    es(e, "{{ " + mv + " := " + emitExpr(e, subj))
+    first := true
+    for a in arms {
+        cond, binds := armCond(e, mv, subj, a.Pat)
+        kw := "if "
+        if !first {
+            kw = " }} else if "
+        }
+        if a.Pat == "_" && !first {
+            kw = " }} else "
+            cond = ""
+        }
+        first = false
+        if cond == "" {
+            es(e, kw + "{{")
+        } else {
+            es(e, kw + cond + " {{")
+        }
+        e.depth++
+        vname := patName(a.Pat)
+        if has(e.variants[vname]) {
+            v := e.variants[vname]
+            for i, bd in binds {
+                if i < len(v.Fields) && bd != "_" {
+                    es(e, bd + " := " + mv + "." + fieldGo(vname, v.Fields[i].Name, i))
+                    es(e, "_ = " + bd)
+                }
+            }
+        }
+        if isENil(a.Expr) {
+            emitStmts(e, a.Stmts)
+        } else if valueCtx {
+            es(e, "return " + emitExpr(e, *a.Expr))
+        } else {
+            es(e, emitExpr(e, *a.Expr))
+        }
+        e.depth--
+    }
+    es(e, " }} else {{ panic(\"go++: non-exhaustive match\") }}")
+    es(e, "}}")
+}
+
+// matchValueGo renders a value-context match as an IIFE of the
+// expected type (the enclosing function's declared result).
+func matchValueGo(e *Emitter, m Expr) string {
+    rt := "any"
+    if len(e.curResults) > 0 {
+        rt = typeGo(e.curResults[0])
+    }
+    save := e.buf
+    e.buf = ""
+    emitMatch(e, m, true)
+    body := e.buf
+    e.buf = save
+    return "func() " + rt + " {{\n" + body + "}}()"
+}
+
+// tryGo: the ? desugar is not supported in m4 emission
+func tryGo(e *Emitter, x Expr) string {
+    return "panic(\"try is not supported in goparse emit v1\")"
+}
+
+// matchValueGo renders a value-context match as an IIFE.
+
+// interpGo expands {expr} interpolation into concatenation (mirrors the
+// compiler's maybeInterp; fragment expressions are parsed by goparse).
+func interpGo(e *Emitter, tok string) string {
+    inner := tok[1 : len(tok)-1]
+    if !contains(inner, "{{") {
+        return tok
+    }
+    parts := ""
+    cur := ""
+    i := 0
+    for i < len(inner) {
+        c := inner[i]
+        if c == byte('{') && i+1 < len(inner) && inner[i+1] == byte('{') {
+            cur = cur + "{{"
+            i = i + 2
+            continue
+        }
+        if c == byte('{') {
+            depth := 1
+            j := i + 1
+            for j < len(inner) && depth > 0 {
+                if inner[j] == byte('{') {
+                    depth++
+                }
+                if inner[j] == byte('}') {
+                    depth--
+                }
+                j++
+            }
+            frag := inner[i+1 : j-1]
+            if cur != "" {
+                if parts == "" {
+                    parts = "\"" + cur + "\""
+                } else {
+                    parts = parts + " + \"" + cur + "\""
+                }
+                cur = ""
+            }
+            fe := fragGo(e, frag)
+            if parts == "" {
+                parts = fe
+            } else {
+                parts = parts + " + " + fe
+            }
+            i = j
+            continue
+        }
+        if c == byte('}') && i+1 < len(inner) && inner[i+1] == byte('}') {
+            cur = cur + "}}"
+            i = i + 2
+            continue
+        }
+        cur = cur + string(rune(c))
+        i++
+    }
+    if cur != "" {
+        if parts == "" {
+            return "\"" + cur + "\""
+        }
+        return parts + " + \"" + cur + "\""
+    }
+    return "(" + parts + ")"
+}
+
+func fragGo(e *Emitter, frag string) string {
+    toks := lex(frag)
+    p := Parser{toks: toks, pos: 0}
+    return emitExpr(e, parseExpr(&p, 1))
+}

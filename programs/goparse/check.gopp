@@ -909,7 +909,8 @@ func structFieldOrder(c *Checker, tname string) [string] {
 
 func checkMatch(c *Checker, subj Expr, arms [Arm]) Type {
     st := checkExpr(c, subj)
-    var result Type
+    hasResult := false
+    result := TVoid()
     for a in arms {
         child(c)
         bindArm(c, a, st)
@@ -920,21 +921,18 @@ func checkMatch(c *Checker, subj Expr, arms [Arm]) Type {
         } else {
             at = checkExpr(c, *a.Expr)
         }
-        if result == nil2() {
+        if !hasResult {
             result = at
+            hasResult = true
         } else if !tyEq(result, at) {
             fail(c, "match arms produce different types: " + tyText(result) + " and " + tyText(at))
         }
         pop(c)
     }
-    if result == nil2() {
+    if !hasResult {
         return TVoid()
     }
     return result
-}
-
-func nil2() Type {
-    return TNamed("<<unset>>")
 }
 
 func bindArm(c *Checker, a Arm, st Type) {

@@ -543,3 +543,80 @@ func TestGocheckProgram(t *testing.T) {
 		t.Fatalf("error fixture:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestSelfHostedEmit compiles a fixture with the REAL compiler and with
+// the go++-written compiler (programs/goparse), then requires identical
+// runtime behavior — the self-hosting proof.
+func TestSelfHostedEmit(t *testing.T) {
+	fixture := `package main
+
+enum Status {
+    Active
+    Banned(reason string)
+}
+
+type Point struct {
+    X int
+    Y int
+}
+
+func dist2(p Point) int {
+    return p.X*p.X + p.Y*p.Y
+}
+
+func describe(s Status) string {
+    return match s {
+    Active -> "active"
+    Banned(r) -> "banned: {r}"
+    }
+}
+
+func main() {
+    println(dist2(Point{X: 3, Y: 4}))
+    println(describe(Banned("spam")))
+    println(describe(Active))
+    total := 0
+    for x in [int]{1, 2, 3} {
+        total += x
+    }
+    println(total)
+}
+`
+	// real compiler
+	realOut := compileAndRun(t, "examples/structs.gopp") // sanity harness exists
+	_ = realOut
+	// write fixture, run via real compiler path
+	dir := t.TempDir()
+	fpath := filepath.Join(dir, "prog.gopp")
+	if err := os.WriteFile(fpath, []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	realGot := compileAndRun(t, fpath)
+
+	// self-hosted: goparse -emit -> go run
+	root := loadGraph("programs/goparse")
+	checkGraph(root)
+	if graphHasErrors(root) {
+		t.Fatal("checkGraph failed")
+	}
+	out := t.TempDir()
+	emitGraph(root, out)
+	goFile := filepath.Join(dir, "prog.go")
+	cmd := exec.Command("go", "run", ".", "-emit", fpath)
+	cmd.Dir = out
+	goSrc, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("self-hosted emit failed: %v\n%s", err, goSrc)
+	}
+	if err := os.WriteFile(goFile, goSrc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd2 := exec.Command("go", "run", goFile)
+	selfGot, err := cmd2.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run of self-hosted output failed: %v\n%s\n---\n%s", err, selfGot, goSrc)
+	}
+	if string(selfGot) != realGot {
+		t.Fatalf("self-hosted output mismatch:\n got %q\nwant %q\n--- Go source:\n%s", selfGot, realGot, goSrc)
+	}
+}

@@ -1100,12 +1100,12 @@ func main() {
     }
     path := args[1]
     mode := "dump"
-    if path == "-check" {
+    if path == "-check" || path == "-emit" {
         if len(args) < 3 {
-            println("usage: goparse [-check] <file.gopp>")
+            println("usage: goparse [-check|-emit] <file.gopp>")
             os.Exit(2)
         }
-        mode = "check"
+        mode = path[1:]
         path = args[2]
     }
     r := os.ReadFile(path)
@@ -1123,6 +1123,20 @@ func main() {
                 for d in c.diags {
                     println(d)
                 }
+                return
+            }
+            if mode == "emit" {
+                c := newChecker()
+                checkDecls(c, decls)
+                for d in c.diags {
+                    println(d)
+                }
+                if len(c.diags) > 0 {
+                    os.Exit(1)
+                }
+                e := newEmitter(decls)
+                emitDecls(e, decls)
+                print(e.buf)
                 return
             }
             for d in decls {
